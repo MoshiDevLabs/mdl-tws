@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Mdl TWS — Tanzania 3D Interactive Weather System</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="labels"></div>
+    <div id="fx"></div>
+    <div id="toast"></div>
+
+    <div id="hud">
+      <i class="k tl"></i><i class="k tr"></i><i class="k bl"></i><i class="k br"></i>
+
+      <div id="head">
+        <h1>Mdl TWS</h1>
+        <div class="sub" id="scen-title">Tanzania 3D Interactive Weather System</div>
+
+        <div class="scen-bar" role="group" aria-label="Weather scenario">
+          <button class="scen-btn on" data-sc="live" type="button">
+            <span class="live-dot"></span>Live Now
+          </button>
+          <button class="scen-btn" data-sc="elnino" type="button">🌊 El Niño + IOD</button>
+          <button class="scen-btn" data-sc="cyclone" type="button">🌀 Cyclone</button>
+        </div>
+
+        <div class="badges">
+          <span class="badge" id="bdg-main">Fetching live Open-Meteo telemetry…</span>
+          <span class="badge hot" id="bdg-sub">Current live weather right now</span>
+          <button id="btn-refresh" class="badge-btn" type="button" title="Refresh live Open-Meteo data">
+            ↻ Sync Live
+          </button>
+        </div>
+
+        <div class="mode-switch" role="group" aria-label="Map visualization mode">
+          <button class="mode-btn on" data-m="both" type="button">Combined</button>
+          <button class="mode-btn" data-m="rain" type="button">Rainfall</button>
+          <button class="mode-btn" data-m="temp" type="button">Temperature</button>
+          <button class="mode-btn" id="q-radar" type="button" title="Toggle radar sweep &amp; range rings">
+            Radar: Off
+          </button>
+        </div>
+
+        <div class="legends">
+          <div class="leg-box leg-rain">
+            Moisture / Rain anomaly<i></i>
+            <div><span>-60%</span><span>0%</span><span>+110%</span></div>
+          </div>
+          <div class="leg-box leg-temp">
+            Heat anomaly (°C)<i></i>
+            <div><span>+0.8°C</span><span>+2.4°C</span><span>+4.2°C</span></div>
+          </div>
+        </div>
+        <div id="probe">Tap the terrain or any city pin to inspect 3D buildings, rivers &amp; weather</div>
+      </div>
+
+      <button
+        id="dock-open"
+        class="card"
+        type="button"
+        aria-label="Show control panel"
+        title="Show control panel (H)"
+      >
+        <span>☰ Controls</span>
+        <em id="dock-mini-stat">Live</em>
+      </button>
+
+      <aside id="dock" class="card">
+        <div class="dock-bar">
+          <nav class="tabs">
+            <button class="tab on" data-t="o">Overview</button>
+            <button class="tab" data-t="r">Regions</button>
+            <button class="tab" data-t="l">Layers</button>
+          </nav>
+          <button id="dock-min" type="button" aria-label="Minimize panel" title="Hide panel (H)">—</button>
+        </div>
+
+        <section data-s="o">
+          <div class="m">
+            <div>
+              <b id="mr">Live</b>
+              <span id="mr-sub">Open-Meteo API</span>
+            </div>
+            <div class="hot-card">
+              <b id="mtavg">+1.8°C</b>
+              <span id="mhot">Peak 32°C (Dar)</span>
+            </div>
+            <div>
+              <b id="mv">Now</b>
+              <span id="mv-sub">Timeline</span>
+            </div>
+            <div>
+              <b id="mc">0</b>
+              <span id="mc-sub">Active rain zones</span>
+            </div>
+          </div>
+
+          <canvas id="pac" class="i" width="460" height="108"></canvas>
+
+          <div id="sim-controls" hidden>
+            <div class="row">
+              <button id="pv" class="b" aria-label="Previous step">‹</button>
+              <button id="ply" class="b">Pause</button>
+              <button id="nx" class="b" aria-label="Next step">›</button>
+              <button id="spd" class="b">1x</button>
+            </div>
+
+            <input
+              id="tm"
+              type="range"
+              min="0"
+              max="5.99"
+              step="0.01"
+              value="0"
+              aria-label="Timeline scrubber"
+            />
+            <div class="lab">
+              <span>Curve: <em style="color:#3fd6ff;font-style:normal">Moisture %</em> vs <em style="color:#ff7b47;font-style:normal">Heat °C</em></span>
+              <span id="tm-range-lbl">Oct → Mar season</span>
+            </div>
+            <canvas id="sp" class="i" width="460" height="72"></canvas>
+
+            <div id="intensity-wrap">
+              <div class="lab">
+                <span id="ns-title">Scenario intensity / El Niño index</span>
+                <span id="nl">+3.3°C (strong)</span>
+              </div>
+              <input
+                id="ns"
+                type="range"
+                min="1"
+                max="3.5"
+                step="0.1"
+                value="3.3"
+                aria-label="Scenario intensity"
+              />
+            </div>
+          </div>
+
+          <p class="note" id="scen-note">
+            Current real-time weather across Tanzania fetched via Open-Meteo. Switch scenarios above to simulate El Niño floods or a Tropical Cyclone.
+          </p>
+        </section>
+
+        <section data-s="r" hidden>
+          <div id="list"></div>
+          <p class="note">Click a region to fly the camera down to its 3D city skyline, forests &amp; river basin.</p>
+        </section>
+
+        <section data-s="l" hidden>
+          <div id="chips"></div>
+          <div class="lab"><span>3D Relief vertical scale</span><span></span></div>
+          <input
+            id="rx"
+            type="range"
+            min="0.35"
+            max="1.35"
+            step="0.05"
+            value="1"
+            aria-label="Relief height"
+          />
+          <div class="row">
+            <button id="auto" class="b">Auto camera on</button>
+            <button id="rst" class="b">Reset view</button>
+          </div>
+          <div class="row">
+            <button id="cpall" class="b">Copy telemetry summary</button>
+          </div>
+          <p class="note">
+            Drag to orbit, scroll/pinch to zoom right into 3D cities &amp; forests. Keys: Space play/pause, H hide panel, Esc close modal.
+          </p>
+        </section>
+      </aside>
+
+      <div id="modal" class="card" role="dialog" aria-label="Region details">
+        <div class="grab"></div>
+        <button id="mx" aria-label="Close">×</button>
+        <div class="mh">
+          <div>
+            <h2 id="mn"></h2>
+            <div class="sub" id="mnote"></div>
+          </div>
+          <div class="pills">
+            <span id="mp" class="pill"></span>
+            <span id="mpt" class="pill"></span>
+          </div>
+        </div>
+
+        <div class="big-grid">
+          <div>
+            <b id="ma"></b>
+            <span id="ma-sub">Moisture / Rain vs normal</span>
+          </div>
+          <div>
+            <b id="mt"></b>
+            <span id="mfeel">Daytime high &amp; feels-like</span>
+          </div>
+        </div>
+
+        <div id="modal-chart-wrap">
+          <canvas id="mb" width="460" height="140"></canvas>
+          <div class="sub" id="mpk"></div>
+        </div>
+        <ul id="mimp"></ul>
+        <div class="note">
+          Live station data powered by Open-Meteo. Follow official Tanzania Meteorological Authority (TMA) advisories for severe weather warnings.
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <button id="mpv" class="b">‹ Prev</button>
+          <button id="mnx" class="b">Next ›</button>
+          <button id="mcp" class="b">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
