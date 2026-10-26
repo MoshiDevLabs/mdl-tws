@@ -1,0 +1,22 @@
+# Dependencies & lockfiles
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build & bundle artifacts
+dist/
+dist-ssr/
+
+# Legacy & archive files
+legacy/
+
+# Version control & environment secrets
+.git/
+.env
+.env.*
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
