@@ -210,12 +210,23 @@ export function buildMarkers(scene, labelsContainer) {
       s.headCore.material.emissiveIntensity = hv ? 0.95 : 0.55;
       s.headHalo.material.color.setHex(tempCol);
 
-      s.stem.position.set(s.x, y, s.z);
-      s.stem.scale.set(hv ? 1.35 : 1, hgt, hv ? 1.35 : 1);
-      s.stem.material.opacity = hv ? 0.72 : 0.42;
+      // Distance-adaptive scale: shrink vertical beacon by 72% when zoomed in or focused so 3D city models shine!
+      const isFocusedSite = curIdx === s.i || (focusMode && focusIdx === s.i);
+      const zoomShrink = isFocusedSite
+        ? 0.26
+        : camDist < 38
+        ? 0.32 + 0.68 * Math.max(0, (camDist - 16) / 22)
+        : 1.0;
 
-      s.headGroup.position.set(s.x, y + hgt, s.z);
-      s.headGroup.scale.setScalar(hv ? 1.45 : 1.0);
+      const effHgt = hgt * zoomShrink;
+      const stemRad = (hv ? 1.25 : 0.95) * (isFocusedSite ? 0.45 : zoomShrink);
+
+      s.stem.position.set(s.x, y, s.z);
+      s.stem.scale.set(stemRad, effHgt, stemRad);
+      s.stem.material.opacity = isFocusedSite ? 0.22 : hv ? 0.68 : 0.38;
+
+      s.headGroup.position.set(s.x, y + effHgt, s.z);
+      s.headGroup.scale.setScalar((hv ? 1.25 : 0.92) * (isFocusedSite ? 0.42 : zoomShrink));
       s.headCore.rotation.y = T * 1.1 + s.i;
       s.headHalo.rotation.z = -T * 0.85;
       s.hit.position.set(s.x, y, s.z);
@@ -224,24 +235,21 @@ export function buildMarkers(scene, labelsContainer) {
       const f = (T * 0.75 + s.i * 0.3) % 1;
       s.ring.position.set(s.x, y + 0.16, s.z);
       s.ring.scale.setScalar((1.1 + f * 2.1) * (hv ? 1.25 : 1));
-      s.ring.material.opacity = (1 - f) * 0.72;
+      s.ring.material.opacity = (1 - f) * (isFocusedSite ? 0.35 : 0.72);
 
       // Project 3D pin head to 2D floating badge
-      tmpVec.set(s.x, y + hgt + 0.65, s.z).project(cam);
+      tmpVec.set(s.x, y + effHgt + 0.55, s.z).project(cam);
       const show =
         labelsVisible &&
         regionsVisible &&
         tmpVec.z < 1 &&
-        (hv || (focusMode && focusIdx === s.i) || s.rank < 6 || camDist < 85);
-      s.el.style.display = show ? 'flex' : 'none';
-      if (show) {
-        s.el.classList.toggle('h', hv);
-        s.el.style.setProperty('--c', primaryHex);
-        s.el.style.setProperty('--tc', TEMP_HEX[s.tempSt]);
-        s.el.style.transform = `translate(-50%,-100%) translate(${
-          (tmpVec.x * 0.5 + 0.5) * innerWidth
-        }px,${(-tmpVec.y * 0.5 + 0.5) * innerHeight - 10}px)`;
-      }
+        (hv || isFocusedSite || s.rank < 6 || camDist < 95);
+      s.screenX = (tmpVec.x * 0.5 + 0.5) * innerWidth;
+      s.screenY = (-tmpVec.y * 0.5 + 0.5) * innerHeight - 10;
+      s.showLabel = show;
+      s.priority = isFocusedSite ? 100 : hv ? 90 : 50 - s.rank;
+      s.primaryHex = primaryHex;
+      s.hv = hv;
     });
 
     townCoords.forEach((t, i) => {
@@ -252,14 +260,71 @@ export function buildMarkers(scene, labelsContainer) {
     });
     tgeo.attributes.position.needsUpdate = true;
 
+    // Smart Screen-Space Label Collision Avoidance across Region Tags, Geo Labels & HUD Panels
+    const occupied = [
+      // Reserve top-left synoptic header area so map labels never drift behind HUD text
+      { x: 215, y: 115, w: 430, h: 220 },
+      // Reserve top-right dock area
+      { x: innerWidth - 180, y: 190, w: 360, h: 360 },
+    ];
+    if (curIdx >= 0) {
+      // Reserve bottom-left modal area when dossier is open
+      occupied.push({ x: 215, y: innerHeight - 300, w: 410, h: 590 });
+    }
+    const orderedSites = [...sites].sort((a, b) => b.priority - a.priority);
+    orderedSites.forEach((s) => {
+      if (!s.showLabel) {
+        s.el.style.display = 'none';
+        return;
+      }
+      const w = 152,
+        h = 24;
+      let sx = s.screenX,
+        sy = s.screenY;
+      let collided = false;
+      for (let i = 0; i < occupied.length; i++) {
+        const b = occupied[i];
+        if (Math.abs(sx - b.x) < (w + b.w) * 0.46 && Math.abs(sy - b.y) < (h + b.h) * 0.55) {
+          if (s.priority >= 90) {
+            sy = b.y - h - 6;
+          } else {
+            collided = true;
+            break;
+          }
+        }
+      }
+      if (collided) {
+        s.el.style.display = 'none';
+      } else {
+        occupied.push({ x: sx, y: sy, w, h });
+        s.el.style.display = 'flex';
+        s.el.classList.toggle('h', s.hv);
+        s.el.style.setProperty('--c', s.primaryHex);
+        s.el.style.setProperty('--tc', TEMP_HEX[s.tempSt]);
+        s.el.style.transform = `translate(-50%,-100%) translate(${Math.round(sx)}px,${Math.round(sy)}px)`;
+      }
+    });
+
     geoLabels.forEach((g) => {
       tmpVec.set(g.x, g.baseH * 0.95 * relScale + g.h + 1.1, g.z).project(cam);
-      const on = labelsVisible && tmpVec.z < 1 && camDist < 155;
+      let on = labelsVisible && tmpVec.z < 1 && camDist < 155;
+      const sx = (tmpVec.x * 0.5 + 0.5) * innerWidth;
+      const sy = (-tmpVec.y * 0.5 + 0.5) * innerHeight;
+      if (on) {
+        const gw = 128,
+          gh = 18;
+        for (let i = 0; i < occupied.length; i++) {
+          const b = occupied[i];
+          if (Math.abs(sx - b.x) < (gw + b.w) * 0.45 && Math.abs(sy - b.y) < (gh + b.h) * 0.55) {
+            on = false;
+            break;
+          }
+        }
+        if (on) occupied.push({ x: sx, y: sy, w: gw, h: gh });
+      }
       g.e.style.display = on ? 'block' : 'none';
       if (on) {
-        g.e.style.transform = `translate(-50%,-100%) translate(${
-          (tmpVec.x * 0.5 + 0.5) * innerWidth
-        }px,${(-tmpVec.y * 0.5 + 0.5) * innerHeight}px)`;
+        g.e.style.transform = `translate(-50%,-100%) translate(${Math.round(sx)}px,${Math.round(sy)}px)`;
       }
     });
   }

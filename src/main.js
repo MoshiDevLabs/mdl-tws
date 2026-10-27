@@ -1,4 +1,4 @@
-// Mdl TWS (Tanzania 3D Interactive Weather System) — Main Application Entry
+// Mdl TWS v3.0 (Tanzania 3D Interactive Weather & Hydrological Atlas) — Main Application Entry
 import * as THREE from 'three';
 import './style.css';
 import {
@@ -15,16 +15,19 @@ import {
   getRainTier,
   getTempTier,
   getImpacts,
+  wp,
   clamp,
 } from './data/climate.js';
 import { fetchLiveTanzaniaWeather } from './data/liveWeather.js';
-import { buildTerrain, relief, inLand, inLake } from './world/terrain.js';
+import { buildTerrain, relief } from './world/terrain.js';
 import { buildEnvironment } from './world/environment.js';
 import { buildRivers } from './world/rivers.js';
 import { buildWorldDetails } from './world/details.js';
+import { buildLandmarks, REGION_LANDMARK_META } from './world/landmarks.js';
 import { buildMarkers } from './world/markers.js';
 import { buildWeatherSystems } from './world/weather.js';
 import { createPostPipeline } from './render/post.js';
+import { createDayNightSystem } from './world/sky.js';
 import { initHUD, $, fmtPct, fmtDeg, fmtTempAnom } from './ui/hud.js';
 
 const canvas = $('c');
@@ -35,7 +38,11 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 1.0;
+
+// Enable PCF Soft Shadows optimized for integrated GPUs & high visual realism
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const cam = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.4, 720);
@@ -46,14 +53,35 @@ const hemiLight = new THREE.HemisphereLight(0xb2e2ff, 0x1e3024, 0.65);
 const sunLight = new THREE.DirectionalLight(0xfff4e2, 1.55);
 sunLight.position.set(-45, 72, 36);
 
+// Tightly configured DirectionalLight shadow frustum covering Tanzania
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 1024;
+sunLight.shadow.mapSize.height = 1024;
+sunLight.shadow.camera.near = 10;
+sunLight.shadow.camera.far = 240;
+sunLight.shadow.camera.left = -78;
+sunLight.shadow.camera.right = 78;
+sunLight.shadow.camera.top = 78;
+sunLight.shadow.camera.bottom = -78;
+sunLight.shadow.bias = -0.0006;
+sunLight.shadow.normalBias = 0.025;
+
 const warmFillLight = new THREE.DirectionalLight(0xff965c, 0.32);
 warmFillLight.position.set(55, 30, -18);
 
 scene.add(ambientLight, hemiLight, sunLight, warmFillLight);
 
+// 24h Diurnal Sun Arc & Celestial Sky System
+const dayNight = createDayNightSystem(scene, renderer, sunLight, ambientLight, hemiLight);
+
 const waterUniforms = {
   uT: { value: 0 },
   uNino: { value: 3.3 },
+  uSunDir: { value: dayNight.getSunDir() },
+  uSunColor: { value: dayNight.getSunColor() },
+  uSkyHorizon: { value: dayNight.getHorizonColor() },
+  uSkyZenith: { value: dayNight.getZenithColor() },
+  uNight: { value: 0.0 },
 };
 
 // Build 3D World Modules
@@ -63,8 +91,9 @@ const { terr, wf, shelfMesh, coastGlow, updateSurface, lift } = buildTerrain(
   waterUniforms,
   renderer
 );
-const { riversGroup, updateRivers } = buildRivers(scene, waterUniforms);
+const { riversGroup, hitMeshes, setHoverRiver, updateRivers } = buildRivers(scene, waterUniforms);
 const { detailsGroup, updateDetails } = buildWorldDetails(scene, waterUniforms);
+const { landmarksGroup, updateLandmarks } = buildLandmarks(scene);
 const { sites, probeGroup, townPoints, updateMarkers } = buildMarkers(scene, $('labels'));
 const { rainMesh, streamMesh, heatPts, updateStreams, updateWeather } = buildWeatherSystems(
   scene,
@@ -75,13 +104,15 @@ const post = createPostPipeline(renderer, scene, cam);
 // Application State (Opens in 'live' Open-Meteo mode by default)
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const state = {
-  scenario: 'live', // 'live' | 'elnino' | 'cyclone' | 'lanina' | 'deluge'
+  scenario: 'live', // 'live' | 'elnino' | 'cyclone'
   tm: 0,
-  playing: false, // In 'live' mode, starts at 'Now' (tm=0); auto-plays when switching to seasonal scenarios
+  playing: false,
   speed: 1,
   nino: 3.3,
   relScale: 1,
   dataMode: 'both', // 'both' | 'rain' | 'temp'
+  quality: 'high', // 'high' | 'low'
+  vantage: 'skyline', // 'skyline' | 'landmark' | 'basin'
   cur: -1,
   hov: -1,
   auto: !reducedMotion,
@@ -138,7 +169,7 @@ function updateSiteMetrics() {
   warmFillLight.intensity = 0.22 + clamp((meanTempAnom - 0.8) / 3.0, 0, 1) * 0.38;
 }
 
-// Camera Orbit & Close-Up Zoom Controller
+// Camera Orbit & Close-Up Diorama Controller
 const camSt = { th: 0.56, ph: 0.92, d: 142, tx: 0, tz: 0 };
 const camTg = { ...camSt };
 let phaseT = 10,
@@ -154,11 +185,40 @@ const sortedSites = () =>
       : Math.abs(b.rainA) - Math.abs(a.rainA)
   );
 
-function openRegion(i) {
+function syncVantageButtons() {
+  document.querySelectorAll('.vantage-btn').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === state.vantage);
+  });
+}
+
+function applyVantageCamera(idx, vantageKey) {
+  const s = sites[idx];
+  const meta = REGION_LANDMARK_META[idx] || REGION_LANDMARK_META[0];
+  const v = (meta.vantages && meta.vantages[vantageKey]) || {
+    dx: 0,
+    dz: 0,
+    d: 15.5,
+    ph: 1.05,
+    thOff: 0.25,
+  };
+  camTg.tx = s.x + v.dx;
+  camTg.tz = s.z + v.dz;
+  camTg.d = v.d;
+  camTg.ph = v.ph;
+  camTg.th = 0.45 + v.thOff;
+}
+
+function openRegion(i, vantageKey = 'skyline') {
   state.cur = i;
   focusIdx = i;
+  state.vantage = vantageKey;
   state.mode = 'focus';
+  state.probeP = null;
+  probeGroup.visible = false;
+  if ($('probe-card')) $('probe-card').hidden = true;
   hold = 1e9;
+  syncVantageButtons();
+  applyVantageCamera(i, vantageKey);
   $('modal').classList.add('open');
   document.body.classList.add('mo');
   hud.drawModal();
@@ -171,7 +231,74 @@ function closeRegion() {
   hold = state.auto ? 3 : 0;
 }
 
-const hud = initHUD(state, sites, { openRegion, closeRegion });
+// River Basin Intelligence Modal Handler (Fixed missing wp import!)
+let activeRiver = null;
+function openRiverBasin(rv) {
+  activeRiver = rv;
+  $('rm-name').textContent = rv.name;
+  $('rm-sub').textContent = rv.basinName;
+  $('rm-catchment').textContent = rv.catchmentKm2;
+  $('rm-length').textContent = rv.lengthKm;
+  $('rm-desc').textContent = rv.significance;
+  $('rm-hydro').textContent = rv.hydro;
+  $('rm-outlet').textContent = rv.outlet;
+
+  const [midLon, midLat] = rv.pts[Math.floor(rv.pts.length / 2)];
+  const [rx, rz] = wp(midLon, midLat);
+  const rainA = rainAnomaly(rx, rz, state.tm, state.nino, state.scenario);
+
+  let pillText = 'Normal Seasonal Flow';
+  let pillColor = '#28c7b8';
+  if (state.scenario === 'cyclone' || rainA > 50) {
+    pillText = '⚠️ Major Inundation Alert';
+    pillColor = '#e0533c';
+  } else if (rainA > 20) {
+    pillText = '🌊 Swelling / High Flow';
+    pillColor = '#e59a3c';
+  } else if (rainA < -25) {
+    pillText = '🍂 Low Seasonal Discharge';
+    pillColor = '#e59a3c';
+  }
+  $('rm-status-pill').textContent = pillText;
+  $('rm-status-pill').style.setProperty('--c', pillColor);
+
+  closeRegion();
+  state.probeP = null;
+  probeGroup.visible = false;
+  if ($('probe-card')) $('probe-card').hidden = true;
+
+  $('river-modal').style.display = 'block';
+  requestAnimationFrame(() => $('river-modal').classList.add('open'));
+
+  // Fly camera to river basin midpoint
+  camTg.tx = rx;
+  camTg.tz = rz;
+  camTg.d = 26;
+  camTg.ph = 1.02;
+  switchToFreeCam();
+}
+
+function closeRiverBasin() {
+  activeRiver = null;
+  $('river-modal').classList.remove('open');
+  setHoverRiver(-1);
+  setTimeout(() => {
+    if (!activeRiver) $('river-modal').style.display = 'none';
+  }, 350);
+}
+
+const hud = initHUD(state, sites, { openRegion, closeRegion, openRiverBasin });
+
+// Bind 3D Diorama Vantage Buttons inside the Region Modal
+document.querySelectorAll('.vantage-btn').forEach((btn) => {
+  btn.onclick = () => {
+    if (state.cur < 0) return;
+    state.vantage = btn.dataset.v;
+    syncVantageButtons();
+    state.mode = 'focus';
+    applyVantageCamera(state.cur, state.vantage);
+  };
+});
 
 // Initial world geometry placement
 updateSiteMetrics();
@@ -191,13 +318,13 @@ function syncLiveWeather(showToast = false) {
       updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
       hud.updateHUD(10, true);
       if (showToast && ls.status === 'live') {
-        hud.toast('Synced live Open-Meteo weather across Tanzania');
+        hud.toast('Synced live Open-Meteo telemetry across 27 Tanzanian stations');
       }
     }
   });
 }
 syncLiveWeather(false);
-setInterval(() => syncLiveWeather(false), 300000); // Auto-refresh live weather every 5 minutes
+setInterval(() => syncLiveWeather(false), 300000);
 
 $('btn-refresh').onclick = () => syncLiveWeather(true);
 
@@ -209,6 +336,12 @@ function switchToFreeCam() {
   }
 }
 
+// Camera Momentum & Inertia Controller
+let velTh = 0,
+  velPh = 0,
+  velD = 0;
+let lastPointerTime = 0;
+
 function driveCamera(dt) {
   if (state.auto) {
     if (hold > 0) hold -= dt;
@@ -218,6 +351,8 @@ function driveCamera(dt) {
         if (state.mode === 'over') {
           focusIdx = sortedSites()[pickCounter++ % 4].i;
           state.mode = 'focus';
+          state.vantage = 'skyline';
+          applyVantageCamera(focusIdx, 'skyline');
           phaseT = 9;
         } else {
           state.mode = 'over';
@@ -226,29 +361,48 @@ function driveCamera(dt) {
       }
     }
   }
+
   if (state.mode === 'over') {
     camTg.tx = 0;
     camTg.tz = 0;
     camTg.d = overviewDist();
     camTg.ph = 0.92;
-    camTg.th += reducedMotion ? 0 : dt * 0.048;
+    camTg.th += reducedMotion ? 0 : dt * 0.045;
   } else if (state.mode === 'focus') {
     const s = sites[focusIdx];
-    camTg.tx = s.x;
-    camTg.tz = s.z;
-    // Zoom in close (d = 19) so 3D city skylines, trees, rivers & clouds are clearly visible!
-    camTg.d = 19;
-    camTg.ph = 1.02;
-    camTg.th += reducedMotion ? 0 : dt * 0.085;
+    const meta = REGION_LANDMARK_META[focusIdx] || REGION_LANDMARK_META[0];
+    const v = (meta.vantages && meta.vantages[state.vantage]) || {
+      dx: 0,
+      dz: 0,
+      d: 15.5,
+      ph: 1.05,
+    };
+    camTg.tx = s.x + v.dx;
+    camTg.tz = s.z + v.dz;
+    camTg.d = v.d;
+    camTg.ph = v.ph;
+    camTg.th += reducedMotion ? 0 : dt * 0.068;
+  } else if (state.mode === 'free' && !pointers.size) {
+    camTg.th += velTh * dt;
+    camTg.ph = clamp(camTg.ph + velPh * dt, 0.2, 1.45);
+    camTg.d = clamp(camTg.d + velD * dt, 5.5, 320);
+
+    const decay = Math.pow(0.04, dt);
+    velTh *= decay;
+    velPh *= decay;
+    velD *= decay;
+    if (Math.abs(velTh) < 0.0001) velTh = 0;
+    if (Math.abs(velPh) < 0.0001) velPh = 0;
+    if (Math.abs(velD) < 0.01) velD = 0;
   }
 
-  const k = 1 - Math.exp(-dt * 2.4);
+  const k = 1 - Math.exp(-dt * 2.6);
   for (const p of ['th', 'ph', 'd', 'tx', 'tz']) {
     camSt[p] += (camTg[p] - camSt[p]) * k;
   }
   const focusY =
-    state.mode === 'focus'
-      ? relief(camSt.tx, camSt.tz) * 0.95 * state.relScale * 0.65
+    state.mode === 'focus' || camSt.d < 38
+      ? relief(camSt.tx, camSt.tz) * 0.95 * state.relScale * 0.72
       : 0;
   cam.position.set(
     camSt.tx + camSt.d * Math.sin(camSt.ph) * Math.sin(camSt.th),
@@ -275,23 +429,85 @@ const hitSite = (x, y) => {
   return hits.length ? hits[0].object.userData.s.i : -1;
 };
 
+if ($('rm-close')) $('rm-close').onclick = closeRiverBasin;
+if ($('rm-btn-close2')) $('rm-btn-close2').onclick = closeRiverBasin;
+if ($('rm-btn-focus')) {
+  $('rm-btn-focus').onclick = () => {
+    if (activeRiver) {
+      const [mouthLon, mouthLat] = activeRiver.pts[activeRiver.pts.length - 1];
+      const [fx, fz] = wp(mouthLon, mouthLat);
+      camTg.tx = fx;
+      camTg.tz = fz;
+      camTg.d = 15.5;
+      camTg.ph = 1.12;
+      switchToFreeCam();
+    }
+  };
+}
+if ($('rm-btn-source')) {
+  $('rm-btn-source').onclick = () => {
+    if (activeRiver) {
+      const [srcLon, srcLat] = activeRiver.pts[0];
+      const [fx, fz] = wp(srcLon, srcLat);
+      camTg.tx = fx;
+      camTg.tz = fz;
+      camTg.d = 16.5;
+      camTg.ph = 1.08;
+      switchToFreeCam();
+    }
+  };
+}
+
+// Probe Card Controls
+if ($('pc-close')) {
+  $('pc-close').onclick = () => {
+    state.probeP = null;
+    probeGroup.visible = false;
+    if ($('probe-card')) $('probe-card').hidden = true;
+  };
+}
+if ($('pc-zoom')) {
+  $('pc-zoom').onclick = () => {
+    if (state.probeP) {
+      camTg.tx = state.probeP.x;
+      camTg.tz = state.probeP.z;
+      camTg.d = 18;
+      camTg.ph = 1.06;
+      switchToFreeCam();
+    }
+  };
+}
+
 function handleTap(x, y) {
   const idx = hitSite(x, y);
   if (idx >= 0) {
-    openRegion(idx);
+    closeRiverBasin();
+    openRegion(idx, 'skyline');
     return;
   }
+
+  // Interactive Clickable Rivers Check
   castFromScreen(x, y);
+  const riverHits = raycaster.intersectObjects(hitMeshes);
+  if (riverHits.length) {
+    openRiverBasin(riverHits[0].object.userData.info);
+    return;
+  }
+
   const hits = raycaster.intersectObject(terr);
   if (hits.length) {
+    closeRiverBasin();
+    closeRegion();
     state.probeP = hits[0].point.clone();
     probeGroup.visible = true;
     hud.updateHUD(10, true);
   } else {
+    closeRiverBasin();
     state.probeP = null;
     probeGroup.visible = false;
+    if ($('probe-card')) $('probe-card').hidden = true;
     $('probe').textContent =
-      'Tap the terrain or any city pin to inspect 3D buildings, rivers & weather';
+      'Click any city, river basin, or terrain coordinate to inspect 3D models & telemetry';
   }
 }
 
@@ -302,10 +518,16 @@ const pinchDist = () => {
 };
 let downInfo = null;
 
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, [e.clientX, e.clientY]);
   downInfo = pointers.size === 1 ? [e.clientX, e.clientY, performance.now()] : null;
+  lastPointerTime = performance.now();
+  velTh = 0;
+  velPh = 0;
+  velD = 0;
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -313,18 +535,43 @@ canvas.addEventListener('pointermove', (e) => {
   my = e.clientY;
   const prev = pointers.get(e.pointerId);
   if (!prev) return;
+  const now = performance.now();
+  const dtPtr = Math.max(0.001, (now - lastPointerTime) * 0.001);
+  const dx = e.clientX - prev[0];
+  const dy = e.clientY - prev[1];
+
   if (pointers.size === 1) {
     if (downInfo && Math.hypot(e.clientX - downInfo[0], e.clientY - downInfo[1]) < 6) return;
-    camTg.th -= (e.clientX - prev[0]) * 0.006;
-    camTg.ph = clamp(camTg.ph - (e.clientY - prev[1]) * 0.005, 0.22, 1.44);
+
+    if (e.buttons === 2 || e.shiftKey) {
+      const panSpeed = camTg.d * 0.0016;
+      const sinTh = Math.sin(camTg.th);
+      const cosTh = Math.cos(camTg.th);
+      camTg.tx -= (dx * cosTh - dy * sinTh) * panSpeed;
+      camTg.tz -= (dx * sinTh + dy * cosTh) * panSpeed;
+      camTg.tx = clamp(camTg.tx, -68, 68);
+      camTg.tz = clamp(camTg.tz, -68, 68);
+      velTh = 0;
+      velPh = 0;
+    } else {
+      const dTh = -dx * 0.0055;
+      const dPh = -dy * 0.0045;
+      camTg.th += dTh;
+      camTg.ph = clamp(camTg.ph + dPh, 0.2, 1.45);
+      velTh = dTh / dtPtr;
+      velPh = dPh / dtPtr;
+    }
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     switchToFreeCam();
   } else {
     const pv = pinchDist();
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
-    camTg.d = clamp((camTg.d * pv) / pinchDist(), 5.5, 320);
+    const nextD = pinchDist();
+    camTg.d = clamp((camTg.d * pv) / nextD, 5.5, 320);
+    velD = 0;
     switchToFreeCam();
   }
+  lastPointerTime = now;
 });
 
 canvas.addEventListener('pointerup', (e) => {
@@ -346,12 +593,13 @@ canvas.addEventListener('pointercancel', (e) => {
 });
 canvas.addEventListener('pointerleave', () => {
   mx = -1;
+  setHoverRiver(-1);
 });
 canvas.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();
-    camTg.d = clamp(camTg.d * (1 + e.deltaY * 0.001), 5.5, 320);
+    velD += e.deltaY * 0.06;
     switchToFreeCam();
   },
   { passive: false }
@@ -375,7 +623,7 @@ document.querySelectorAll('.tab').forEach((b) => {
   };
 });
 
-// Scenario Switcher (Live Now | El Niño + IOD | Cyclone | La Niña Drought | Highland Deluge)
+// Scenario Switcher (Live Now | El Niño + IOD | Cyclone)
 const sl = $('tm');
 document.querySelectorAll('.scen-btn').forEach((b) => {
   b.onclick = () => {
@@ -385,7 +633,7 @@ document.querySelectorAll('.scen-btn').forEach((b) => {
       sl.value = 0;
       state.playing = false;
     } else if (state.scenario === 'cyclone') {
-      state.tm = 2.6; // Start right as cyclone approaches coast
+      state.tm = 2.6;
       sl.value = 2.6;
       state.playing = !reducedMotion;
     } else {
@@ -430,6 +678,25 @@ if ($('q-radar')) {
   $('q-radar').onclick = () => {
     state.layers.radar = !state.layers.radar;
     syncRadarUI();
+  };
+}
+
+// Quality Toggle for Integrated GPUs (High vs Low)
+if ($('q-quality')) {
+  $('q-quality').onclick = () => {
+    state.quality = state.quality === 'high' ? 'low' : 'high';
+    const isHigh = state.quality === 'high';
+    $('q-quality').textContent = isHigh ? 'Quality: High' : 'Quality: Fast';
+    $('q-quality').classList.toggle('on', !isHigh);
+    renderer.setPixelRatio(isHigh ? Math.min(window.devicePixelRatio, 1.5) : 1.0);
+    renderer.shadowMap.enabled = isHigh;
+    sunLight.castShadow = isHigh;
+    onResize();
+    hud.toast(
+      isHigh
+        ? 'High quality mode enabled (soft shadows & native DPI)'
+        : 'Fast integrated-GPU mode enabled (1.0x DPI, shadows off)'
+    );
   };
 }
 
@@ -482,6 +749,7 @@ $('ns').oninput = (e) => {
 
 $('rx').oninput = (e) => {
   state.relScale = +e.target.value;
+  if ($('rx-val')) $('rx-val').textContent = state.relScale.toFixed(2) + '×';
   updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario);
   updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
   updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
@@ -498,6 +766,10 @@ $('auto').onclick = () => {
 
 $('rst').onclick = () => {
   closeRegion();
+  closeRiverBasin();
+  state.probeP = null;
+  probeGroup.visible = false;
+  if ($('probe-card')) $('probe-card').hidden = true;
   state.auto = true;
   state.mode = 'over';
   phaseT = 9;
@@ -505,7 +777,7 @@ $('rst').onclick = () => {
   hud.updateButtonsUI();
 };
 
-const stepRegion = (d) => openRegion((state.cur + d + sites.length) % sites.length);
+const stepRegion = (d) => openRegion((state.cur + d + sites.length) % sites.length, state.vantage);
 $('mx').onclick = closeRegion;
 $('mpv').onclick = () => stepRegion(-1);
 $('mnx').onclick = () => stepRegion(1);
@@ -539,7 +811,7 @@ const makeStamp = () => {
     state.scenario === 'live'
       ? `Live (+${Math.round((state.tm / 6) * 24)}h)`
       : `${MONTHS[mi]} ${mi < 3 ? 2026 : 2027}`;
-  return `Mdl TWS (Tanzania 3D Interactive Weather System) — ${sc.title} [${timeStr}]`;
+  return `Mdl TWS (Tanzania 3D Synoptic Atlas) — ${sc.title} [${timeStr}]`;
 };
 
 $('mcp').onclick = () => {
@@ -570,12 +842,12 @@ $('cpall').onclick = () =>
 
 [
   ['surf', 'Terrain & beaches'],
-  ['cities', '3D Cities & trees'],
+  ['cities', '3D Cities & landmarks'],
   ['rivers', 'Rivers & basins'],
   ['reg', 'Station pins'],
   ['flow', 'Wind vectors'],
   ['cloud', '3D Clouds & storms'],
-  ['lab', 'Labels'],
+  ['lab', 'Map labels'],
   ['radar', 'Radar sweep'],
 ].forEach(([k, label]) => {
   const b = document.createElement('button');
@@ -600,9 +872,48 @@ window.addEventListener('keydown', (e) => {
     hud.updateButtonsUI();
   } else if (e.key === 'ArrowRight' && state.scenario !== 'live') stepMonth(1);
   else if (e.key === 'ArrowLeft' && state.scenario !== 'live') stepMonth(-1);
-  else if (e.key === 'Escape') closeRegion();
-  else if (e.key === 'h' || e.key === 'H') toggleDock();
+  else if (e.key === 'Escape') {
+    closeRegion();
+    closeRiverBasin();
+  } else if (e.key === 'h' || e.key === 'H') toggleDock();
 });
+
+// Sun / Night Cycle HUD Controls
+function formatTimeOfDay(h) {
+  const hr = Math.floor(h);
+  const min = Math.floor((h - hr) * 60);
+  const pad = (n) => String(n).padStart(2, '0');
+  let label = 'Daylight';
+  if (h >= 5.0 && h < 7.0) label = 'Dawn / Sunrise';
+  else if (h >= 7.0 && h < 11.5) label = 'Morning';
+  else if (h >= 11.5 && h < 14.5) label = 'Midday Peak';
+  else if (h >= 14.5 && h < 17.5) label = 'Afternoon';
+  else if (h >= 17.5 && h < 19.0) label = 'Golden Hour';
+  else if (h >= 19.0 && h < 20.5) label = 'Dusk Twilight';
+  else label = 'Starry Night';
+  return `${pad(hr)}:${pad(min)} (${label})`;
+}
+
+const sunSlider = $('sun-time-slider');
+const sunTimeVal = $('sun-time-val');
+const sunAutoBtn = $('sun-auto-btn');
+
+if (sunSlider && sunTimeVal) {
+  sunSlider.oninput = (e) => {
+    const val = parseFloat(e.target.value);
+    dayNight.setTime(val);
+    sunTimeVal.textContent = formatTimeOfDay(val);
+  };
+}
+
+if (sunAutoBtn) {
+  sunAutoBtn.onclick = () => {
+    const nextAuto = !dayNight.getAutoProgress();
+    dayNight.setAutoProgress(nextAuto);
+    sunAutoBtn.textContent = nextAuto ? 'Auto ▶' : 'Auto ⏸';
+    sunAutoBtn.classList.toggle('on', nextAuto);
+  };
+}
 
 function onResize() {
   const w = window.innerWidth,
@@ -617,7 +928,7 @@ onResize();
 camSt.d = camTg.d = overviewDist();
 hud.updateButtonsUI();
 
-// Optional URL query deep-linking (?sc=cyclone|elnino|lanina|deluge|live & ?focus=0..8)
+// URL query deep-linking (?sc=cyclone|elnino|live & ?focus=0..8 & ?vantage=skyline|landmark|basin & ?river=0..8)
 {
   const params = new URLSearchParams(window.location.search);
   const qSc = params.get('sc');
@@ -626,18 +937,29 @@ hud.updateButtonsUI();
     if (btn) btn.click();
   }
   const qFocus = params.get('focus');
+  const qVantage = params.get('vantage') || 'skyline';
   if (qFocus !== null && sites[+qFocus]) {
-    openRegion(+qFocus);
+    openRegion(+qFocus, qVantage);
     camSt.tx = camTg.tx;
     camSt.tz = camTg.tz;
-    camSt.d = camTg.d = 17.5;
-    camSt.ph = camTg.ph = 1.02;
+    camSt.d = camTg.d;
+    camSt.ph = camTg.ph;
+    camSt.th = camTg.th;
+  }
+  const qRiver = params.get('river');
+  if (qRiver !== null && hitMeshes[+qRiver]) {
+    openRiverBasin(hitMeshes[+qRiver].userData.info);
+    camSt.tx = camTg.tx;
+    camSt.tz = camTg.tz;
+    camSt.d = camTg.d;
+    camSt.ph = camTg.ph;
   }
 }
 
 // Main Render & Simulation Loop
 let T = 0,
   frameCount = 0,
+  surfaceAccum = 0,
   lastTime = performance.now();
 
 renderer.setAnimationLoop((now) => {
@@ -650,10 +972,29 @@ renderer.setAnimationLoop((now) => {
     sl.value = state.tm;
   }
 
-  updateSiteMetrics();
-  waterUniforms.uT.value = T;
+  // Update 24h Sun & Night Cycle
+  dayNight.update(dt);
+  if (dayNight.getAutoProgress() && sunSlider && sunTimeVal) {
+    const curH = dayNight.getTime();
+    sunSlider.value = curH;
+    sunTimeVal.textContent = formatTimeOfDay(curH);
+  }
 
-  if (state.layers.surf && (state.playing || frameCount % 4 === 0)) {
+  // Synchronize dynamic lighting & reflections into water and world shaders
+  waterUniforms.uT.value = T;
+  waterUniforms.uSunDir.value.copy(dayNight.getSunDir());
+  waterUniforms.uSunColor.value.copy(dayNight.getSunColor());
+  waterUniforms.uSkyHorizon.value.copy(dayNight.getHorizonColor());
+  waterUniforms.uSkyZenith.value.copy(dayNight.getZenithColor());
+  waterUniforms.uNight.value = dayNight.getNightFactor();
+
+  updateSiteMetrics();
+
+  // Throttle heavy 23,000-vertex terrain rebuilds during playback to ~12 Hz for smooth iGPU performance
+  surfaceAccum += dt;
+  const surfInterval = state.quality === 'low' ? 0.14 : 0.08;
+  if (state.layers.surf && surfaceAccum >= surfInterval) {
+    surfaceAccum = 0;
     updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario);
     updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
     updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
@@ -671,6 +1012,7 @@ renderer.setAnimationLoop((now) => {
     coastGlow.visible =
       !!state.layers.surf;
   detailsGroup.visible = !!state.layers.cities;
+  landmarksGroup.visible = !!state.layers.cities;
   townPoints.visible = !!state.layers.cities;
   riversGroup.visible = !!state.layers.rivers;
   regLines.visible = !!state.layers.reg;
@@ -681,12 +1023,29 @@ renderer.setAnimationLoop((now) => {
   rings.forEach((r) => (r.visible = !!state.layers.radar));
   $('labels').style.display = state.layers.lab ? 'block' : 'none';
 
-  if (frameCount % 3 === 0) {
+  // Raycasting hover check: sites and clickable rivers
+  if (frameCount % 2 === 0) {
+    let cursor = 'default';
     const h = mx >= 0 && !pointers.size ? hitSite(mx, my) : -1;
+    if (h >= 0) {
+      cursor = 'pointer';
+      setHoverRiver(-1);
+    } else if (mx >= 0 && !pointers.size && state.layers.rivers) {
+      castFromScreen(mx, my);
+      const rHits = raycaster.intersectObjects(hitMeshes);
+      if (rHits.length) {
+        cursor = 'pointer';
+        setHoverRiver(rHits[0].object.userData.index);
+      } else {
+        setHoverRiver(-1);
+      }
+    } else {
+      setHoverRiver(-1);
+    }
     if (h !== state.hov) {
       state.hov = h;
-      canvas.style.cursor = h >= 0 ? 'pointer' : 'default';
     }
+    canvas.style.cursor = cursor;
   }
 
   updateMarkers({
@@ -702,6 +1061,21 @@ renderer.setAnimationLoop((now) => {
     focusIdx,
     labelsVisible: !!state.layers.lab,
     regionsVisible: !!state.layers.reg,
+  });
+
+  updateLandmarks({
+    T,
+    tm: state.tm,
+    nino: state.nino,
+    relScale: state.relScale,
+    liftFn: lift,
+    dataMode: state.dataMode,
+    scenario: state.scenario,
+    camDist: camSt.d,
+    focusIdx,
+    curIdx: state.cur,
+    sites,
+    visible: !!state.layers.cities,
   });
 
   updateWeather(T, dt, !!state.layers.cloud, state.dataMode, state.tm, state.scenario);
@@ -723,5 +1097,7 @@ renderer.setAnimationLoop((now) => {
   if (frameCount++ % 2 === 0) hud.drawPacificDiagram(T);
   hud.updateHUD(dt);
 
+  // Update post-processing shaders
+  post.update(dt, T);
   post.composer.render();
 });

@@ -289,14 +289,27 @@ export function buildWeatherSystems(scene, sites) {
         const a = p.t[k],
           b = p.t[k + 1];
         const f = (k / TL) * (0.35 + 0.55 * speedNorm);
-        sp3.set([a[0], a[1], a[2], b[0], b[1], b[2]], n);
+        sp3[n] = a[0];
+        sp3[n + 1] = a[1];
+        sp3[n + 2] = a[2];
+        sp3[n + 3] = b[0];
+        sp3[n + 4] = b[1];
+        sp3[n + 5] = b[2];
+        let cr = 0.28 * f,
+          cg = 0.82 * f,
+          cb = 0.94 * f;
         if (isTemp) {
-          sc3.set([1.0 * f, 0.55 * f, 0.2 * f, 1.0 * f, 0.55 * f, 0.2 * f], n);
+          cr = 1.0 * f;
+          cg = 0.58 * f;
+          cb = 0.22 * f;
         } else if (isCyclone && w.speedKmh > 55) {
-          sc3.set([0.65 * f, 0.92 * f, 1.0 * f, 0.65 * f, 0.92 * f, 1.0 * f], n);
-        } else {
-          sc3.set([0.32 * f, 0.85 * f, 1.0 * f, 0.32 * f, 0.85 * f, 1.0 * f], n);
+          cr = 0.65 * f;
+          cg = 0.92 * f;
+          cb = 1.0 * f;
         }
+        sc3[n] = sc3[n + 3] = cr;
+        sc3[n + 1] = sc3[n + 4] = cg;
+        sc3[n + 2] = sc3[n + 5] = cb;
         n += 6;
       }
     });
@@ -406,6 +419,10 @@ export function buildWeatherSystems(scene, sites) {
       s.shadowMat.opacity = showCloud ? cloudFrac * 0.32 : 0;
 
       // Slanted rain curtains beneath cloud deck — strictly 0 when dry in Live mode!
+      const wAngle = (((s.windDir || 110) + 180) * Math.PI) / 180;
+      const wScale = clamp((s.windKmh || 15) / 55, 0.15, 0.95);
+      const wx = Math.sin(wAngle) * wScale;
+      const wz = Math.cos(wAngle) * wScale;
       for (let d = 0; d < ND; d++) {
         const r = rd[i * ND + d];
         const f = (r[2] + T * 1.35 * r[3]) % 1;
@@ -413,19 +430,20 @@ export function buildWeatherSystems(scene, sites) {
         const y = top - (top - s.y - 0.2) * f;
         const n = (i * ND + d) * 6;
         const k = activeRain ? rainIntensity * (1 - f * 0.5) * 0.88 : 0;
-        const windDrift = (1 - f) * 0.45;
-        rp3.set(
-          [
-            cx + r[0] + windDrift,
-            y,
-            cz + r[1],
-            cx + r[0] + windDrift + 0.14,
-            y + 0.95,
-            cz + r[1],
-          ],
-          n
-        );
-        rc3.set([0.55 * k, 0.85 * k, 1.0 * k, 0.55 * k, 0.85 * k, 1.0 * k], n);
+        const driftX = (1 - f) * wx;
+        const driftZ = (1 - f) * wz;
+        rp3[n] = cx + r[0] + driftX;
+        rp3[n + 1] = y;
+        rp3[n + 2] = cz + r[1] + driftZ;
+        rp3[n + 3] = cx + r[0] + driftX + wx * 0.28;
+        rp3[n + 4] = y + 0.95;
+        rp3[n + 5] = cz + r[1] + driftZ + wz * 0.28;
+        const cr = 0.45 * k,
+          cg = 0.86 * k,
+          cb = 0.98 * k;
+        rc3[n] = rc3[n + 3] = cr;
+        rc3[n + 1] = rc3[n + 4] = cg;
+        rc3[n + 2] = rc3[n + 5] = cb;
       }
 
       // Rising convective heat shimmer particles in hot/dry regions

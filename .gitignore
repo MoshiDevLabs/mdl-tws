@@ -36,4 +36,5 @@ Thumbs.db
 .gemini/
 .cursor/
 .claude/
+.agents/
 .aider*

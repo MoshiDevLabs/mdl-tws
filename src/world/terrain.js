@@ -265,8 +265,69 @@ export function buildTerrain(scene, waterUniforms, renderer) {
     uLakeTex: { value: lakeMaskTex },
   };
 
+  // High-Precision Sobel Elevation Normal Map for Tanzania's Topography
+  function bakeTerrainNormalMap(size = 512) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+
+    // Fast height grid pre-sampling
+    const hGrid = new Float32Array(size * size);
+    for (let py = 0; py < size; py++) {
+      const v = py / size;
+      const z = (1.0 - v) * (2 * R) - R;
+      for (let px = 0; px < size; px++) {
+        const u = px / size;
+        const x = u * (2 * R) - R;
+        hGrid[py * size + px] = relief(x, z);
+      }
+    }
+
+    const strength = 1.95;
+    for (let py = 1; py < size - 1; py++) {
+      for (let px = 1; px < size - 1; px++) {
+        const h00 = hGrid[(py - 1) * size + (px - 1)];
+        const h10 = hGrid[(py - 1) * size + px];
+        const h20 = hGrid[(py - 1) * size + (px + 1)];
+        const h01 = hGrid[py * size + (px - 1)];
+        const h21 = hGrid[py * size + (px + 1)];
+        const h02 = hGrid[(py + 1) * size + (px - 1)];
+        const h12 = hGrid[(py + 1) * size + px];
+        const h22 = hGrid[(py + 1) * size + (px + 1)];
+
+        const dX = (h20 + 2.0 * h21 + h22) - (h00 + 2.0 * h01 + h02);
+        const dY = (h02 + 2.0 * h12 + h22) - (h00 + 2.0 * h10 + h20);
+
+        const nx = -dX * strength;
+        const ny = -dY * strength;
+        const nz = 1.0;
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+
+        const idx = (py * size + px) * 4;
+        data[idx] = Math.floor(((nx / len) * 0.5 + 0.5) * 255);
+        data[idx + 1] = Math.floor(((ny / len) * 0.5 + 0.5) * 255);
+        data[idx + 2] = Math.floor(((nz / len) * 0.5 + 0.5) * 255);
+        data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
+  }
+
+  const normalMapTex = bakeTerrainNormalMap(512);
+
   const tmat = new THREE.MeshStandardMaterial({
     map: satTex,
+    normalMap: normalMapTex,
+    normalScale: new THREE.Vector2(0.85, 0.85),
     vertexColors: true,
     roughness: 0.78,
     metalness: 0.05,
@@ -366,6 +427,7 @@ export function buildTerrain(scene, waterUniforms, renderer) {
   };
 
   const terr = new THREE.Mesh(tgm, tmat);
+  terr.receiveShadow = true;
   scene.add(terr);
 
   // Subtle holographic wireframe overlay

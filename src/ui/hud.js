@@ -1,7 +1,6 @@
-// HUD, Real-Time Live Telemetry Readouts, Dual Sparklines & Region Detail Modal
+// HUD, Real-Time Live Telemetry Readouts, Wind Rose Anemometer, Basin List & Region/Point Dossiers
 import {
   MONTHS,
-  LIVE_HOURS,
   SCENARIOS,
   RAIN_STATUS,
   RAIN_HEX,
@@ -13,29 +12,51 @@ import {
   heatIndexC,
   sampleWind,
   sampleLiveWeather,
-  getStationLiveWeather,
   getRainTier,
-  getTempTier,
   getImpacts,
+  wp,
   unwp,
   clamp,
 } from '../data/climate.js';
 import { liveState } from '../data/liveWeather.js';
 import { relief } from '../world/terrain.js';
+import { RIVER_PATHS } from '../world/rivers.js';
+import { REGION_LANDMARK_META } from '../world/landmarks.js';
 
 export const $ = (id) => document.getElementById(id);
 export const fmtPct = (a) => (a >= 0 ? '+' : '') + Math.round(a) + '%';
 export const fmtTempAnom = (t) => (t >= 0 ? '+' : '') + t.toFixed(1) + '°C';
 export const fmtDeg = (t) => Math.round(t) + '°C';
-export const fmtMm = (mm) => (mm >= 0.08 ? `${mm.toFixed(1)} mm/h` : '0.0 mm (Dry)');
+export const fmtMm = (mm) => (mm >= 0.08 ? `${mm.toFixed(1)} mm/h` : '0.0 mm/h');
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 export const degToCompass = (d) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
+
+function beaufortLabel(kmh) {
+  if (kmh < 6) return 'Calm / Light air';
+  if (kmh < 20) return 'Gentle breeze';
+  if (kmh < 38) return 'Moderate breeze';
+  if (kmh < 62) return 'Strong wind';
+  if (kmh < 88) return 'Gale force';
+  return 'Tropical storm / Cyclone';
+}
+
+function classifyBiome(lon, lat, elevM) {
+  if (elevM > 3200) return 'Alpine Volcanic Zone';
+  if (elevM > 1650 && lat < -7.5) return 'Southern Highlands Escarpment';
+  if (elevM > 1500 && lat > -4.5) return 'Northern Volcanic Highlands';
+  if (lon > 38.7 && elevM < 260) return 'Swahili Coastal Plain & Estuary';
+  if (lat > -3.3 && lon < 34.5) return 'Lake Victoria Great Basin';
+  if (lon < 31.2) return 'Albertine Rift / Tanganyika Escarpment';
+  if (lat < -7.5 && lon > 36.0) return 'Selous / Rufiji Floodplain';
+  return 'Central Plateau Miombo & Savanna';
+}
 
 export function initHUD(state, sites, callbacks) {
   const spCtx = $('sp').getContext('2d');
   const pcCtx = $('pac').getContext('2d');
   const listEl = $('list');
+  const basinListEl = $('basin-list');
   let hudTimer = 0;
   let lastOrderKey = '';
 
@@ -66,11 +87,27 @@ export function initHUD(state, sites, callbacks) {
   });
 
   const listButtons = sites.map((s) => {
+    const meta = REGION_LANDMARK_META[s.i];
     const b = document.createElement('button');
     b.type = 'button';
-    b.innerHTML = `<span class="r-name">${s.n}</span><span class="r-stats"><em class="r-rain"></em><b class="t-val"></b></span>`;
+    b.innerHTML = `<div><span class="r-name">${s.n}</span><span class="r-sub">${
+      meta ? meta.landmarkName : s.note
+    }</span></div><span class="r-stats"><em class="r-rain"></em><b class="t-val"></b></span>`;
     b.onclick = () => callbacks.openRegion(s.i);
     return b;
+  });
+
+  // Populate the 9 Tanzanian River Basins tab in the dock
+  const basinButtons = RIVER_PATHS.map((rv) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.style.setProperty('--c', '#28c7b8');
+    b.innerHTML = `<div><span class="r-name">${rv.name}</span><span class="r-sub">${rv.basinName} · ${rv.catchmentKm2}</span></div><span class="r-stats"><em class="r-flow">${rv.lengthKm}</em></span>`;
+    b.onclick = () => {
+      if (callbacks.openRiverBasin) callbacks.openRiverBasin(rv);
+    };
+    if (basinListEl) basinListEl.appendChild(b);
+    return { btn: b, rv };
   });
 
   function toast(msg) {
@@ -78,15 +115,15 @@ export function initHUD(state, sites, callbacks) {
     e.textContent = msg;
     e.classList.add('s');
     clearTimeout(toast.h);
-    toast.h = setTimeout(() => e.classList.remove('s'), 1900);
+    toast.h = setTimeout(() => e.classList.remove('s'), 2100);
   }
 
   function updateScenarioHeader() {
     const sc = SCENARIOS[state.scenario] || SCENARIOS.live;
     $('scen-title').textContent =
       state.scenario === 'live'
-        ? 'Tanzania 3D Interactive Weather System'
-        : `Tanzania 3D Interactive Weather System · ${sc.title}`;
+        ? 'Tanzania 3D Interactive Weather & Basin System'
+        : `Tanzania 3D Synoptic Atlas · ${sc.title}`;
     $('scen-note').textContent = sc.note;
 
     const isLive = state.scenario === 'live';
@@ -124,48 +161,131 @@ export function initHUD(state, sites, callbacks) {
     updateScenarioHeader();
   }
 
+  function drawWindRose(windDir, windKmh) {
+    const canvas = $('m-wind-rose');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width,
+      H = canvas.height,
+      cx = W / 2,
+      cy = H / 2,
+      r = W * 0.38;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Outer & inner instrument rings
+    ctx.strokeStyle = 'rgba(148, 179, 204, 0.28)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(40, 199, 184, 0.22)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.56, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Crosshairs
+    ctx.strokeStyle = 'rgba(148, 179, 204, 0.18)';
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy);
+    ctx.lineTo(cx + r, cy);
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx, cy + r);
+    ctx.stroke();
+
+    // Cardinal N/E/S/W labels
+    ctx.fillStyle = '#94a7b8';
+    ctx.font = '600 9px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('N', cx, cy - r - 6);
+    ctx.fillText('S', cx, cy + r + 6);
+    ctx.fillText('E', cx + r + 6, cy);
+    ctx.fillText('W', cx - r - 6, cy);
+
+    // Wind vector arrow (pointing in direction wind blows toward, with tail at source bearing)
+    const rad = ((windDir - 90) * Math.PI) / 180;
+    const len = r * clamp(0.45 + windKmh / 55, 0.48, 0.92);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rad);
+
+    // Vector shaft
+    ctx.strokeStyle = '#28c7b8';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.65, 0);
+    ctx.lineTo(len * 0.85, 0);
+    ctx.stroke();
+
+    // Arrowhead at origin side showing wind flow
+    ctx.fillStyle = '#e59a3c';
+    ctx.beginPath();
+    ctx.arc(len * 0.82, 0, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#28c7b8';
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.82, 0);
+    ctx.lineTo(-len * 0.35, -4.5);
+    ctx.lineTo(-len * 0.35, 4.5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
   function drawPacificDiagram(T) {
     const W = 460,
       H = 108;
     pcCtx.clearRect(0, 0, W, H);
     const g = pcCtx.createLinearGradient(0, 0, W, 0);
-    g.addColorStop(0, '#0a253d');
-    g.addColorStop(0.5, '#091f34');
-    g.addColorStop(1, '#121b2c');
+    g.addColorStop(0, '#071829');
+    g.addColorStop(0.5, '#091d30');
+    g.addColorStop(1, '#101928');
     pcCtx.fillStyle = g;
     pcCtx.fillRect(0, 0, W, H);
 
     // Mdl TWS reference box
-    pcCtx.fillStyle = '#183d54';
-    pcCtx.fillRect(22, 36, 68, 44);
-    pcCtx.strokeStyle = 'rgba(63,214,255,0.55)';
-    pcCtx.strokeRect(22, 36, 68, 44);
-    pcCtx.fillStyle = '#e2eff8';
-    pcCtx.font = '500 13px JetBrains Mono,monospace';
-    pcCtx.fillText('Mdl TWS', 24, 26);
+    pcCtx.fillStyle = 'rgba(40, 199, 184, 0.14)';
+    pcCtx.fillRect(20, 34, 72, 46);
+    pcCtx.strokeStyle = 'rgba(40, 199, 184, 0.55)';
+    pcCtx.strokeRect(20, 34, 72, 46);
+    pcCtx.fillStyle = '#f2efe9';
+    pcCtx.font = '600 12.5px Space Grotesk, sans-serif';
+    pcCtx.fillText('TANZANIA', 23, 24);
+    pcCtx.fillStyle = '#28c7b8';
+    pcCtx.font = '500 11px JetBrains Mono, monospace';
+    pcCtx.fillText('27 Stns', 31, 61);
 
     if (state.scenario === 'live') {
       const avgWind = sites.reduce((a, s) => a + s.windKmh, 0) / sites.length;
       const maxTemp = Math.max(...sites.map((s) => s.absTemp));
       const minTemp = Math.min(...sites.map((s) => s.absTemp));
-      const rainingCount = liveState.stations.filter((st) => st.precipMm >= 0.08 || st.weatherCode >= 51).length;
+      const rainingCount = liveState.stations.filter(
+        (st) => st.precipMm >= 0.08 || st.weatherCode >= 51
+      ).length;
 
-      pcCtx.fillStyle = '#58f2a8';
-      pcCtx.font = '600 13.5px JetBrains Mono,monospace';
+      pcCtx.fillStyle = '#5ef2d6';
+      pcCtx.font = '600 13px JetBrains Mono, monospace';
       pcCtx.fillText(
-        liveState.status === 'live' ? '● LIVE OPEN-METEO SATELLITE & STATIONS' : '● LIVE TELEMETRY',
+        liveState.status === 'live'
+          ? '● LIVE OPEN-METEO SATELLITE & STATIONS'
+          : '● LIVE TELEMETRY FEED',
         106,
         26
       );
-      pcCtx.fillStyle = '#e2eff8';
-      pcCtx.font = '12.5px JetBrains Mono,monospace';
+      pcCtx.fillStyle = '#f2efe9';
+      pcCtx.font = '12px JetBrains Mono, monospace';
       pcCtx.fillText(
-        `Temp: ${Math.round(minTemp)}°C–${Math.round(maxTemp)}°C · Active rain: ${rainingCount}/27 stations`,
+        `Range: ${Math.round(minTemp)}°C–${Math.round(maxTemp)}°C · Active rain: ${rainingCount}/27 stations`,
         106,
         50
       );
-      pcCtx.fillText(`Mean wind: ${Math.round(avgWind)} km/h · Satellite relief active`, 106, 72);
-      pcCtx.fillStyle = '#82a0b8';
+      pcCtx.fillText(`Mean wind: ${Math.round(avgWind)} km/h · 3D Landmarks active`, 106, 72);
+      pcCtx.fillStyle = '#94a7b8';
       pcCtx.fillText(`Synced: ${liveState.updatedAt || 'Now'}`, 106, 94);
       return;
     }
@@ -175,16 +295,16 @@ export function initHUD(state, sites, callbacks) {
       const cy = 58 + Math.sin(T * 3) * 3;
       const r = 28;
       const cg = pcCtx.createRadialGradient(cx, cy, 3, cx, cy, r);
-      cg.addColorStop(0, 'rgba(180, 220, 255, 0.95)');
-      cg.addColorStop(0.5, 'rgba(75, 135, 255, 0.55)');
-      cg.addColorStop(1, 'rgba(75, 135, 255, 0)');
+      cg.addColorStop(0, 'rgba(242, 239, 233, 0.95)');
+      cg.addColorStop(0.5, 'rgba(40, 199, 184, 0.55)');
+      cg.addColorStop(1, 'rgba(40, 199, 184, 0)');
       pcCtx.fillStyle = cg;
       pcCtx.beginPath();
       pcCtx.arc(cx, cy, r, 0, Math.PI * 2);
       pcCtx.fill();
-      pcCtx.fillStyle = '#fff';
+      pcCtx.fillStyle = '#f2efe9';
       pcCtx.fillText('🌀 Cyclone Eye', cx - 45, cy - 32);
-      pcCtx.fillStyle = '#82a0b8';
+      pcCtx.fillStyle = '#94a7b8';
       pcCtx.fillText('SW Indian Ocean → Coast landfall', 175, H - 8);
       return;
     }
@@ -194,7 +314,7 @@ export function initHUD(state, sites, callbacks) {
       ioY = 58,
       ioR = 22 + 8 * clamp(state.nino / 3.3, 0, 1.2) + 3 * Math.sin(T * 2.4);
     const ioG = pcCtx.createRadialGradient(ioX, ioY, 2, ioX, ioY, ioR);
-    ioG.addColorStop(0, 'rgba(255, 145, 55, 0.78)');
+    ioG.addColorStop(0, 'rgba(229, 154, 60, 0.78)');
     ioG.addColorStop(1, 'rgba(0, 0, 0, 0)');
     pcCtx.fillStyle = ioG;
     pcCtx.beginPath();
@@ -205,22 +325,22 @@ export function initHUD(state, sites, callbacks) {
       py = 56,
       r = 30 + 15 * clamp(state.nino / 3.3, 0, 1.2) + 4 * Math.sin(T * 2);
     const rg = pcCtx.createRadialGradient(px, py, 3, px, py, r);
-    rg.addColorStop(0, 'rgba(255, 85, 45, 0.95)');
-    rg.addColorStop(0.55, 'rgba(255, 130, 50, 0.5)');
+    rg.addColorStop(0, 'rgba(224, 83, 60, 0.95)');
+    rg.addColorStop(0.55, 'rgba(229, 154, 60, 0.5)');
     rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
     pcCtx.fillStyle = rg;
     pcCtx.beginPath();
     pcCtx.arc(px, py, r, 0, Math.PI * 2);
     pcCtx.fill();
 
-    pcCtx.fillStyle = '#fff';
-    pcCtx.font = '600 14px JetBrains Mono,monospace';
+    pcCtx.fillStyle = '#f2efe9';
+    pcCtx.font = '600 13.5px JetBrains Mono, monospace';
     pcCtx.fillText('+' + state.nino.toFixed(1) + '°C', px - 28, py + 5);
-    pcCtx.fillStyle = '#82a0b8';
-    pcCtx.font = '12.5px JetBrains Mono,monospace';
-    pcCtx.fillText('Niño 3.4 & W. Indian Ocean heat', px - 155, H - 8);
+    pcCtx.fillStyle = '#94a7b8';
+    pcCtx.font = '12px JetBrains Mono, monospace';
+    pcCtx.fillText('Niño 3.4 & W. Indian Ocean SST', px - 155, H - 8);
 
-    pcCtx.strokeStyle = state.dataMode === 'temp' ? '#ff7b47' : '#3fd6ff';
+    pcCtx.strokeStyle = state.dataMode === 'temp' ? '#e59a3c' : '#28c7b8';
     pcCtx.lineWidth = 2.2;
     pcCtx.setLineDash([8, 6]);
     pcCtx.lineDashOffset = -T * 30;
@@ -235,9 +355,18 @@ export function initHUD(state, sites, callbacks) {
     if (state.cur < 0) return;
     const s = sites[state.cur];
     const isLive = state.scenario === 'live';
+    const meta = REGION_LANDMARK_META[s.i] || REGION_LANDMARK_META[0];
 
+    const latStr = `${Math.abs(s.lat).toFixed(2)}°S`;
+    const lonStr = `${s.lon.toFixed(2)}°E`;
+    if ($('m-coords')) {
+      $('m-coords').textContent = `${latStr}, ${lonStr} · ELEV ${s.elevM}m`;
+    }
     $('mn').textContent = s.n;
-    $('mnote').textContent = `${s.note} · ${s.elevM}m · Wind ${Math.round(s.windKmh)} km/h ${degToCompass(s.windDir)}`;
+    $('mnote').textContent = `${s.note} · ${meta.archName}`;
+    if ($('m-landmark-name')) {
+      $('m-landmark-name').textContent = meta.landmarkName;
+    }
 
     const pRain = $('mp');
     pRain.textContent = isLive
@@ -253,19 +382,47 @@ export function initHUD(state, sites, callbacks) {
 
     if (isLive) {
       $('ma').textContent = fmtMm(s.precipMm || 0);
-      $('ma').style.color = s.isRaining ? '#3fd6ff' : '#58c496';
-      $('ma-sub').textContent = `${s.weatherDesc || 'Clear'} · Cloud cover ${Math.round(
+      $('ma').style.color = s.isRaining ? '#28c7b8' : '#58c496';
+      $('ma-sub').textContent = `${s.isRaining ? s.weatherDesc : 'Dry condition'} · Clouds ${Math.round(
         s.cloudCover || 0
       )}%`;
     } else {
       $('ma').textContent = fmtPct(s.rainA);
       $('ma').style.color = RAIN_HEX[s.rainSt];
-      $('ma-sub').textContent = 'Moisture / Rain vs normal';
+      $('ma-sub').textContent = `${RAIN_STATUS[s.rainSt]} vs seasonal baseline`;
     }
 
     $('mt').textContent = `${fmtDeg(s.absTemp)} (${fmtTempAnom(s.tempA)})`;
     $('mt').style.color = TEMP_HEX[s.tempSt];
-    $('mfeel').textContent = `Feels like ${fmtDeg(s.feelsLike)} · Wind ${Math.round(s.windKmh)} km/h`;
+    $('mfeel').textContent = `Heat index ${fmtDeg(s.feelsLike)} · Elev ${s.elevM}m`;
+
+    // Update Wind Rose Compass & Anemometer Readout
+    const compassDir = degToCompass(s.windDir);
+    if ($('m-wind-val')) {
+      $('m-wind-val').textContent = `${Math.round(s.windKmh)} km/h ${compassDir}`;
+    }
+    if ($('m-wind-sub')) {
+      $('m-wind-sub').textContent = `${Math.round(s.windDir)}° · ${beaufortLabel(s.windKmh)}`;
+    }
+    drawWindRose(s.windDir, s.windKmh);
+
+    // Update Basin Saturation Index Gauge
+    const satPct = isLive
+      ? clamp(Math.round(28 + (s.precipMm || 0) * 14 + (s.cloudCover || 0) * 0.25), 14, 98)
+      : clamp(Math.round(45 + s.rainA * 0.45), 10, 99);
+    const satLabel =
+      satPct >= 78 ? 'High Flood Risk' : satPct >= 56 ? 'Elevated Flow' : satPct <= 24 ? 'Low / Dry' : 'Normal Flow';
+    if ($('m-hydro-val')) {
+      $('m-hydro-val').textContent = `${satPct}% · ${satLabel}`;
+      $('m-hydro-val').style.color =
+        satPct >= 78 ? '#e0533c' : satPct >= 56 ? '#e59a3c' : '#28c7b8';
+    }
+    if ($('m-hydro-fill')) {
+      $('m-hydro-fill').style.width = `${satPct}%`;
+    }
+    if ($('m-hydro-sub')) {
+      $('m-hydro-sub').textContent = meta.basinLabel;
+    }
 
     $('mimp').innerHTML = getImpacts(
       s.rainA,
@@ -279,31 +436,48 @@ export function initHUD(state, sites, callbacks) {
       .map((t) => `<li>${t}</li>`)
       .join('');
 
-    if ($('modal-chart-wrap')) $('modal-chart-wrap').hidden = isLive;
-    if (isLive) return;
+    // Draw Trajectory Chart in #mb (supports both Live 24h Diurnal Profile & Seasonal Oct-Mar)
+    if ($('modal-chart-wrap')) $('modal-chart-wrap').hidden = false;
+    const labels = isLive ? ['Now', '+4h', '+8h', '+12h', '+18h', '+24h'] : MONTHS;
+    if ($('m-chart-title')) {
+      $('m-chart-title').textContent = isLive
+        ? '24-HOUR DIURNAL STATION PROFILE'
+        : 'SEASONAL TRAJECTORY (OCT – MAR)';
+    }
 
-    const labels = MONTHS;
-    const rVals = [0, 1, 2, 3, 4, 5].map((m) =>
-      rainAnomaly(s.x, s.z, m + 0.4, state.nino, state.scenario)
-    );
     const hVal = relief(s.x, s.z);
-    const tVals = [0, 1, 2, 3, 4, 5].map((m) =>
-      actualTempC(s.x, s.z, hVal, m + 0.4, state.nino, state.scenario)
-    );
+    const rVals = [0, 1, 2, 3, 4, 5].map((m) => {
+      if (isLive) {
+        const baseP = s.precipMm || 0;
+        const cloudTerm = ((s.cloudCover || 20) - 30) * 0.5;
+        return clamp(
+          baseP * 25 + cloudTerm + Math.sin(m * 1.1 + s.i) * 16,
+          -35,
+          115
+        );
+      }
+      return rainAnomaly(s.x, s.z, m + 0.4, state.nino, state.scenario);
+    });
+
+    const tVals = [0, 1, 2, 3, 4, 5].map((m) => {
+      if (isLive) {
+        const diurnal = Math.sin(((m - 1) / 6) * Math.PI * 2) * 3.2;
+        return s.absTemp + diurnal;
+      }
+      return actualTempC(s.x, s.z, hVal, m + 0.4, state.nino, state.scenario);
+    });
 
     const pkRain = rVals.reduce((b, x, i) => (Math.abs(x) > Math.abs(rVals[b]) ? i : b), 0);
     const pkTemp = tVals.reduce((b, x, i) => (x > tVals[b] ? i : b), 0);
 
-    $('mpk').textContent = `Peak moisture: ${labels[pkRain]} (${fmtPct(
-      rVals[pkRain]
-    )}) · Hottest: ${labels[pkTemp]} (${fmtDeg(tVals[pkTemp])})`;
+    $('mpk').textContent = `Peak: ${labels[pkRain]} · Max ${fmtDeg(tVals[pkTemp])}`;
 
     const c = $('mb').getContext('2d');
     const W = 460,
-      H = 140,
-      mid = 68;
+      H = 128,
+      mid = 64;
     c.clearRect(0, 0, W, H);
-    c.strokeStyle = '#1c354a';
+    c.strokeStyle = 'rgba(148, 179, 204, 0.18)';
     c.lineWidth = 1;
     c.beginPath();
     c.moveTo(0, mid);
@@ -311,42 +485,42 @@ export function initHUD(state, sites, callbacks) {
     c.stroke();
 
     rVals.forEach((x, m) => {
-      const h = (clamp(x, -130, 130) / 130) * 52;
-      const bx = 16 + m * 74;
-      c.fillStyle = x < 0 ? 'rgba(242,160,61,0.82)' : 'rgba(63,214,255,0.82)';
-      c.fillRect(bx, h >= 0 ? mid - h : mid, 46, Math.abs(h) || 2);
-      if (m === Math.floor(state.tm)) {
-        c.strokeStyle = '#fff';
-        c.lineWidth = 1.8;
-        c.strokeRect(bx - 4, 4, 54, H - 26);
+      const h = (clamp(x, -120, 120) / 120) * 46;
+      const bx = 18 + m * 74;
+      c.fillStyle = x < 0 ? 'rgba(229, 154, 60, 0.75)' : 'rgba(40, 199, 184, 0.78)';
+      c.fillRect(bx, h >= 0 ? mid - h : mid, 44, Math.abs(h) || 2);
+      if (!isLive && m === Math.floor(state.tm)) {
+        c.strokeStyle = '#f2efe9';
+        c.lineWidth = 1.5;
+        c.strokeRect(bx - 3, 4, 50, H - 24);
       }
-      c.fillStyle = '#82a0b8';
-      c.font = '13.5px JetBrains Mono,monospace';
+      c.fillStyle = '#94a7b8';
+      c.font = '12px JetBrains Mono, monospace';
       c.fillText(labels[m], bx + 6, H - 5);
     });
 
     const tMin = Math.min(...tVals) - 1.5;
     const tMax = Math.max(...tVals) + 1.5;
-    c.strokeStyle = '#ff6b35';
-    c.lineWidth = 2.5;
+    c.strokeStyle = '#e59a3c';
+    c.lineWidth = 2.4;
     c.beginPath();
     tVals.forEach((tv, m) => {
-      const x = 39 + m * 74;
-      const y = H - 34 - ((tv - tMin) / Math.max(2, tMax - tMin)) * 78;
+      const x = 40 + m * 74;
+      const y = H - 30 - ((tv - tMin) / Math.max(2, tMax - tMin)) * 72;
       m ? c.lineTo(x, y) : c.moveTo(x, y);
     });
     c.stroke();
 
     tVals.forEach((tv, m) => {
-      const x = 39 + m * 74;
-      const y = H - 34 - ((tv - tMin) / Math.max(2, tMax - tMin)) * 78;
-      c.fillStyle = '#ff9233';
+      const x = 40 + m * 74;
+      const y = H - 30 - ((tv - tMin) / Math.max(2, tMax - tMin)) * 72;
+      c.fillStyle = '#e0533c';
       c.beginPath();
-      c.arc(x, y, 3.6, 0, Math.PI * 2);
+      c.arc(x, y, 3.4, 0, Math.PI * 2);
       c.fill();
-      c.fillStyle = '#ffd166';
-      c.font = '12px JetBrains Mono,monospace';
-      c.fillText(Math.round(tv) + '°', x - 10, Math.max(13, y - 7));
+      c.fillStyle = '#f2efe9';
+      c.font = '11.5px JetBrains Mono, monospace';
+      c.fillText(Math.round(tv) + '°', x - 10, Math.max(12, y - 6));
     });
   }
 
@@ -398,7 +572,7 @@ export function initHUD(state, sites, callbacks) {
       H = 72;
     spCtx.clearRect(0, 0, W, H);
 
-    spCtx.strokeStyle = '#3fd6ff';
+    spCtx.strokeStyle = '#28c7b8';
     spCtx.lineWidth = 2.2;
     spCtx.beginPath();
     rainCurve.forEach((v, i) => {
@@ -408,7 +582,7 @@ export function initHUD(state, sites, callbacks) {
     });
     spCtx.stroke();
 
-    spCtx.strokeStyle = '#ff6b35';
+    spCtx.strokeStyle = '#e59a3c';
     spCtx.lineWidth = 2.2;
     spCtx.beginPath();
     tempCurve.forEach((v, i) => {
@@ -418,7 +592,7 @@ export function initHUD(state, sites, callbacks) {
     });
     spCtx.stroke();
 
-    spCtx.fillStyle = '#ffffff';
+    spCtx.fillStyle = '#f2efe9';
     spCtx.fillRect((state.tm / 6) * W - 1, 0, 2, H);
 
     const sortedSites = [...sites].sort((a, b) =>
@@ -462,34 +636,76 @@ export function initHUD(state, sites, callbacks) {
       }`;
     });
 
+    // Update River Basin flow status colors in the Basins tab
+    basinButtons.forEach(({ btn, rv }) => {
+      const [midLon, midLat] = rv.pts[Math.floor(rv.pts.length / 2)];
+      const [rx, rz] = wp(midLon, midLat);
+      const rA = rainAnomaly(rx, rz, state.tm, state.nino, state.scenario);
+      const col = rA > 45 ? '#e0533c' : rA > 18 ? '#e59a3c' : '#28c7b8';
+      btn.style.setProperty('--c', col);
+      const flowEl = btn.querySelector('.r-flow');
+      if (flowEl) {
+        flowEl.style.color = col;
+        flowEl.textContent = rA > 45 ? '⚠️ Flood' : rA > 18 ? 'High Flow' : rv.lengthKm;
+      }
+    });
+
     if (state.cur >= 0) drawModal();
 
+    // Update Terrain Point-Probe Readout & Floating Probe Card
+    const probeCard = $('probe-card');
     if (state.probeP) {
       const px = state.probeP.x,
         pz = state.probeP.z;
       const h = relief(px, pz);
       const [lon, lat] = unwp(px, pz);
+      const elevM = Math.max(5, Math.round(h * 1120));
+      const biome = classifyBiome(lon, lat, elevM);
+      const coordStr = `${Math.abs(lat).toFixed(2)}°S, ${lon.toFixed(2)}°E · ${elevM}m`;
+
+      if (probeCard && state.cur < 0) {
+        probeCard.hidden = false;
+        $('pc-coords').textContent = coordStr;
+        $('pc-biome').textContent = biome;
+      }
+
       if (isLive) {
         const lw = sampleLiveWeather(px, pz, h, state.tm);
-        $('probe').textContent = `Live Probe ${lat.toFixed(2)}°, ${lon.toFixed(2)}°: ${fmtDeg(
+        $('probe').textContent = `Field Probe ${coordStr} (${biome}): ${fmtDeg(
           lw.absTemp
-        )} (feels ${fmtDeg(lw.feelsLike)}) · Rain ${fmtMm(lw.precipMm)} (${
-          lw.weatherDesc
-        }) · Clouds ${Math.round(lw.cloudCover)}% · Wind ${Math.round(lw.windKmh)} km/h ${degToCompass(
-          lw.windDir
-        )}`;
+        )} · ${fmtMm(lw.precipMm)} (${lw.weatherDesc}) · Wind ${Math.round(
+          lw.windKmh
+        )} km/h ${degToCompass(lw.windDir)}`;
+        if (probeCard) {
+          $('pc-temp').textContent = fmtDeg(lw.absTemp);
+          $('pc-feel').textContent = `Feels ${fmtDeg(lw.feelsLike)}`;
+          $('pc-rain').textContent = fmtMm(lw.precipMm);
+          $('pc-cond').textContent = lw.weatherDesc || 'Clear';
+          $('pc-wind').textContent = `${Math.round(lw.windKmh)} km/h`;
+          $('pc-dir').textContent = `${degToCompass(lw.windDir)} (${Math.round(lw.windDir)}°)`;
+        }
       } else {
         const rA = rainAnomaly(px, pz, state.tm, state.nino, state.scenario);
         const absT = actualTempC(px, pz, h, state.tm, state.nino, state.scenario);
         const feelT = heatIndexC(px, pz, h, state.tm, state.nino, state.scenario);
         const w = sampleWind(px, pz, state.tm, state.nino, state.scenario);
         const rTier = getRainTier(rA);
-        $('probe').textContent = `Probe ${lat.toFixed(2)}°, ${lon.toFixed(2)}°: ${fmtDeg(
+        $('probe').textContent = `Field Probe ${coordStr} (${biome}): ${fmtDeg(
           absT
-        )} (feels ${fmtDeg(feelT)}) · Rain ${fmtPct(rA)} (${RAIN_STATUS[rTier]}) · Wind ${Math.round(
+        )} · Rain ${fmtPct(rA)} (${RAIN_STATUS[rTier]}) · Wind ${Math.round(
           w.speedKmh
         )} km/h ${degToCompass(w.dirDeg)}`;
+        if (probeCard) {
+          $('pc-temp').textContent = fmtDeg(absT);
+          $('pc-feel').textContent = `Feels ${fmtDeg(feelT)}`;
+          $('pc-rain').textContent = fmtPct(rA);
+          $('pc-cond').textContent = RAIN_STATUS[rTier];
+          $('pc-wind').textContent = `${Math.round(w.speedKmh)} km/h`;
+          $('pc-dir').textContent = `${degToCompass(w.dirDeg)} (${Math.round(w.dirDeg)}°)`;
+        }
       }
+    } else if (probeCard) {
+      probeCard.hidden = true;
     }
   }
 

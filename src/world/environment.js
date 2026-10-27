@@ -8,50 +8,8 @@ import { mulberry } from './noise.js';
 export function buildEnvironment(scene, waterUniforms) {
   const rnd = mulberry(99);
 
-  // Atmospheric gradient sky & horizon scattering dome
-  const skyCanvas = document.createElement('canvas');
-  skyCanvas.width = 8;
-  skyCanvas.height = 512;
-  const ctx = skyCanvas.getContext('2d');
-  const grad = ctx.createLinearGradient(0, 0, 0, 512);
-  grad.addColorStop(0.0, '#030914');
-  grad.addColorStop(0.38, '#081b31');
-  grad.addColorStop(0.7, '#113556');
-  grad.addColorStop(0.9, '#1e4e72');
-  grad.addColorStop(1.0, '#2e6588');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 8, 512);
-  const skyTex = new THREE.CanvasTexture(skyCanvas);
-  skyTex.colorSpace = THREE.SRGBColorSpace;
-  scene.background = skyTex;
-  scene.fog = new THREE.FogExp2(0x0b2238, 0.0022);
-
-  // Subtle stars in upper zenith
-  const starCount = 700;
-  const starPos = new Float32Array(starCount * 3);
-  for (let i = 0; i < starCount; i++) {
-    const u = rnd() * Math.PI * 2;
-    const v = rnd() * 0.8 + 0.2;
-    const r = 440;
-    const q = Math.sqrt(1 - v * v);
-    starPos[i * 3] = Math.cos(u) * q * r;
-    starPos[i * 3 + 1] = v * r * 0.72;
-    starPos[i * 3 + 2] = Math.sin(u) * q * r;
-  }
-  const starGeo = new THREE.BufferGeometry();
-  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-  const stars = new THREE.Points(
-    starGeo,
-    new THREE.PointsMaterial({
-      color: 0xc8e8ff,
-      size: 1.25,
-      sizeAttenuation: false,
-      fog: false,
-      transparent: true,
-      opacity: 0.45,
-    })
-  );
-  scene.add(stars);
+  // No obscuring scene fog - terrain, rivers & cities are 100% crisp and clear
+  scene.fog = null;
 
   // Bake 512x512 Full-Perimeter Bathymetry & Shoreline Wave-Lap Map around all of RINGS
   const coastCanvas = document.createElement('canvas');
@@ -162,6 +120,11 @@ export function buildEnvironment(scene, waterUniforms) {
     uniform float uT;
     uniform float uNino;
     uniform sampler2D uCoastTex;
+    uniform vec3 uSunDir;
+    uniform vec3 uSunColor;
+    uniform vec3 uSkyHorizon;
+    uniform vec3 uSkyZenith;
+    uniform float uNight;
     varying vec2 vP;
     varying vec3 vWorldPos;
     varying float vWaveElev;
@@ -204,22 +167,27 @@ export function buildEnvironment(scene, waterUniforms) {
       vec3 waveN = normalize(vec3(-hX * 3.2, 1.0, -hZ * 3.2));
 
       vec3 viewDir = normalize(cameraPosition - vWorldPos);
-      vec3 sunDir = normalize(vec3(-0.42, 0.68, 0.32));
+      vec3 sunDir = length(uSunDir) > 0.01 ? normalize(uSunDir) : normalize(vec3(-0.42, 0.68, 0.32));
+      vec3 sunCol = length(uSunColor) > 0.01 ? uSunColor : vec3(0.95, 0.92, 0.85);
 
       float cosTheta = max(0.0, dot(viewDir, waveN));
       float fresnel = 0.04 + 0.96 * pow(1.0 - cosTheta, 4.0);
 
-      vec3 abyssalOcean = vec3(0.02, 0.09, 0.18);
-      vec3 pelagicOcean = vec3(0.04, 0.24, 0.39);
-      vec3 turquoiseReef = vec3(0.05, 0.30, 0.42);
-      vec3 skyRefl = mix(vec3(0.18, 0.42, 0.64), vec3(0.45, 0.72, 0.92), cosTheta);
+      // Atmospheric sky reflection derived from current time-of-day
+      vec3 skyHorizon = length(uSkyHorizon) > 0.01 ? uSkyHorizon : vec3(0.35, 0.65, 0.88);
+      vec3 skyZenith = length(uSkyZenith) > 0.01 ? uSkyZenith : vec3(0.08, 0.22, 0.44);
+      vec3 skyRefl = mix(skyHorizon, skyZenith, clamp(cosTheta * 1.3, 0.0, 1.0));
+
+      vec3 abyssalOcean = mix(vec3(0.02, 0.09, 0.18), vec3(0.005, 0.015, 0.04), uNight);
+      vec3 pelagicOcean = mix(vec3(0.04, 0.24, 0.39), vec3(0.01, 0.05, 0.12), uNight);
+      vec3 turquoiseReef = mix(vec3(0.05, 0.30, 0.42), vec3(0.01, 0.07, 0.12), uNight);
 
       float swellFactor = clamp(hC * 1.8 + 0.5, 0.0, 1.0);
       vec3 col = mix(abyssalOcean, pelagicOcean, swellFactor * 0.85);
 
       // Subsurface turquoise scattering through wave crests
       float sss = clamp(vWaveElev * 2.2 + 0.2, 0.0, 1.0) * pow(max(0.0, dot(viewDir, -sunDir + waveN * 0.6)), 2.0);
-      col += vec3(0.04, 0.28, 0.36) * sss * 0.38;
+      col += mix(vec3(0.04, 0.28, 0.36), vec3(0.01, 0.04, 0.08), uNight) * sss * (1.0 - uNight * 0.85) * 0.38;
 
       // Subtle deeper coastal shelf water where the ocean meets the 3D border wall
       if (reefShelf > 0.02) {
@@ -228,19 +196,22 @@ export function buildEnvironment(scene, waterUniforms) {
         col = mix(col, lagoonCol, clamp(reefShelf * 0.55, 0.0, 0.48));
       }
 
-      col = mix(col, skyRefl, fresnel * 0.50);
+      col = mix(col, skyRefl, fresnel * 0.56);
 
       // Subtle, muted water lap at the base of the outer border wall (no bright glare)
       if (surfZone > 0.15) {
         float lap = sin(surfZone * 20.0 - uT * 2.4 + hC * 3.5) * 0.5 + 0.5;
         float foam = smoothstep(0.68, 0.94, lap) * smoothstep(0.15, 0.80, surfZone);
-        col = mix(col, vec3(0.52, 0.65, 0.74), foam * 0.16);
+        col = mix(col, vec3(0.52, 0.65, 0.74) * (1.0 - uNight * 0.7), foam * 0.16);
       }
 
+      // Microfacet GGX Specular Sun-Glitter Path across Indian Ocean
       vec3 halfV = normalize(sunDir + viewDir);
-      float specBroad = pow(max(0.0, dot(waveN, halfV)), 28.0) * 0.22;
-      float specSharp = pow(max(0.0, dot(waveN, halfV)), 140.0) * 0.75;
-      col += vec3(0.95, 0.96, 0.92) * (specBroad + specSharp);
+      float NdotH = max(0.0, dot(waveN, halfV));
+      float specBroad = pow(NdotH, 22.0) * 0.28;
+      float specSharp = pow(NdotH, 150.0) * 1.35;
+      vec3 sunglint = sunCol * (specBroad + specSharp);
+      col += sunglint * (1.0 - uNight * 0.88);
 
       float edgeFade = 1.0 - smoothstep(0.82, 1.0, rad / 68.0) * 0.65;
       col *= edgeFade;

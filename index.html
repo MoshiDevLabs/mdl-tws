@@ -3,31 +3,31 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Mdl TWS — Tanzania 3D Interactive Weather System</title>
+    <title>Mdl TWS — Tanzania 3D Synoptic Weather &amp; Hydrological Atlas</title>
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
     />
   </head>
   <body>
     <canvas id="c"></canvas>
     <div id="labels"></div>
-    <div id="fx"></div>
     <div id="toast"></div>
 
     <div id="hud">
-      <i class="k tl"></i><i class="k tr"></i><i class="k bl"></i><i class="k br"></i>
-
       <div id="head">
-        <h1>Mdl TWS</h1>
-        <div class="sub" id="scen-title">Tanzania 3D Interactive Weather System</div>
+        <div class="brand-row">
+          <span class="inst-tag">TMA · SYNOPTIC ATLAS</span>
+          <h1>Mdl TWS</h1>
+        </div>
+        <div class="sub" id="scen-title">Tanzania 3D Interactive Weather &amp; Basin System</div>
 
         <div class="scen-bar" role="group" aria-label="Weather scenario">
           <button class="scen-btn on" data-sc="live" type="button">
             <span class="live-dot"></span>Live Now
           </button>
           <button class="scen-btn" data-sc="elnino" type="button">🌊 El Niño + IOD</button>
-          <button class="scen-btn" data-sc="cyclone" type="button">🌀 Cyclone</button>
+          <button class="scen-btn" data-sc="cyclone" type="button">🌀 Cyclone Landfall</button>
         </div>
 
         <div class="badges">
@@ -45,19 +45,22 @@
           <button class="mode-btn" id="q-radar" type="button" title="Toggle radar sweep &amp; range rings">
             Radar: Off
           </button>
+          <button class="mode-btn" id="q-quality" type="button" title="Toggle rendering quality for integrated GPUs">
+            Quality: High
+          </button>
         </div>
 
         <div class="legends">
           <div class="leg-box leg-rain">
-            Moisture / Rain anomaly<i></i>
+            <span>Moisture / Rain anomaly</span><i></i>
             <div><span>-60%</span><span>0%</span><span>+110%</span></div>
           </div>
           <div class="leg-box leg-temp">
-            Heat anomaly (°C)<i></i>
+            <span>Thermal anomaly (°C)</span><i></i>
             <div><span>+0.8°C</span><span>+2.4°C</span><span>+4.2°C</span></div>
           </div>
         </div>
-        <div id="probe">Tap the terrain or any city pin to inspect 3D buildings, rivers &amp; weather</div>
+        <div id="probe">Click any city, river basin, or terrain coordinate to inspect 3D models &amp; telemetry</div>
       </div>
 
       <button
@@ -67,7 +70,7 @@
         aria-label="Show control panel"
         title="Show control panel (H)"
       >
-        <span>☰ Controls</span>
+        <span>☰ Instrument Dock</span>
         <em id="dock-mini-stat">Live</em>
       </button>
 
@@ -75,7 +78,8 @@
         <div class="dock-bar">
           <nav class="tabs">
             <button class="tab on" data-t="o">Overview</button>
-            <button class="tab" data-t="r">Regions</button>
+            <button class="tab" data-t="r">Cities (9)</button>
+            <button class="tab" data-t="b">Basins (9)</button>
             <button class="tab" data-t="l">Layers</button>
           </nav>
           <button id="dock-min" type="button" aria-label="Minimize panel" title="Hide panel (H)">—</button>
@@ -121,7 +125,7 @@
               aria-label="Timeline scrubber"
             />
             <div class="lab">
-              <span>Curve: <em style="color:#3fd6ff;font-style:normal">Moisture %</em> vs <em style="color:#ff7b47;font-style:normal">Heat °C</em></span>
+              <span>Curve: <em style="color:#28c7b8;font-style:normal">Moisture %</em> vs <em style="color:#e59a3c;font-style:normal">Heat °C</em></span>
               <span id="tm-range-lbl">Oct → Mar season</span>
             </div>
             <canvas id="sp" class="i" width="460" height="72"></canvas>
@@ -150,12 +154,33 @@
 
         <section data-s="r" hidden>
           <div id="list"></div>
-          <p class="note">Click a region to fly the camera down to its 3D city skyline, forests &amp; river basin.</p>
+          <p class="note">Select a city station to fly into its 3D architectural diorama, landmarks &amp; local weather ring.</p>
+        </section>
+
+        <section data-s="b" hidden>
+          <div id="basin-list"></div>
+          <p class="note">Select any major Tanzanian river basin to inspect catchment hydrology, dams &amp; flood thresholds.</p>
         </section>
 
         <section data-s="l" hidden>
           <div id="chips"></div>
-          <div class="lab"><span>3D Relief vertical scale</span><span></span></div>
+
+          <div class="lab"><span>☀️ Diurnal Solar &amp; Night Cycle</span><span id="sun-time-val">14:00 (Afternoon)</span></div>
+          <div class="row" style="margin-bottom: 8px;">
+            <input
+              id="sun-time-slider"
+              type="range"
+              min="0"
+              max="24"
+              step="0.25"
+              value="14"
+              aria-label="Time of Day"
+              style="flex: 1;"
+            />
+            <button id="sun-auto-btn" class="b" style="flex: 0 0 auto; padding: 5px 10px; font-size: 11px;">Auto ⏸</button>
+          </div>
+
+          <div class="lab"><span>3D Topographic Vertical Exaggeration</span><span id="rx-val">1.00×</span></div>
           <input
             id="rx"
             type="range"
@@ -167,24 +192,26 @@
           />
           <div class="row">
             <button id="auto" class="b">Auto camera on</button>
-            <button id="rst" class="b">Reset view</button>
+            <button id="rst" class="b">Reset overview</button>
           </div>
           <div class="row">
-            <button id="cpall" class="b">Copy telemetry summary</button>
+            <button id="cpall" class="b">Copy synoptic bulletin</button>
           </div>
           <p class="note">
-            Drag to orbit, scroll/pinch to zoom right into 3D cities &amp; forests. Keys: Space play/pause, H hide panel, Esc close modal.
+            Drag to orbit, right-drag/Shift-drag to pan, scroll to zoom into 3D landmarks. Keys: Space play/pause, H toggle dock, Esc close dossier.
           </p>
         </section>
       </aside>
 
+      <!-- Region & 3D Diorama Dossier Modal -->
       <div id="modal" class="card" role="dialog" aria-label="Region details">
         <div class="grab"></div>
         <button id="mx" aria-label="Close">×</button>
         <div class="mh">
           <div>
-            <h2 id="mn"></h2>
-            <div class="sub" id="mnote"></div>
+            <div class="eyebrow" id="m-coords">6.82°S, 39.28°E · ELEV 24m</div>
+            <h2 id="mn">Dar es Salaam</h2>
+            <div class="sub" id="mnote">Coastal metropolis &amp; Msimbazi basin</div>
           </div>
           <div class="pills">
             <span id="mp" class="pill"></span>
@@ -192,29 +219,142 @@
           </div>
         </div>
 
-        <div class="big-grid">
-          <div>
-            <b id="ma"></b>
-            <span id="ma-sub">Moisture / Rain vs normal</span>
+        <!-- 3D Diorama Vantage Switcher -->
+        <div class="diorama-box">
+          <div class="diorama-head">
+            <span class="d-label">🏛️ 3D DIORAMA</span>
+            <strong id="m-landmark-name">Tanzanite Bridge &amp; Port Cranes</strong>
           </div>
-          <div>
-            <b id="mt"></b>
-            <span id="mfeel">Daytime high &amp; feels-like</span>
+          <div class="diorama-btns" role="group" aria-label="3D Diorama camera angle">
+            <button type="button" class="vantage-btn on" data-v="skyline">City Skyline</button>
+            <button type="button" class="vantage-btn" data-v="landmark">3D Landmark</button>
+            <button type="button" class="vantage-btn" data-v="basin">Basin Overview</button>
+          </div>
+        </div>
+
+        <div class="big-grid">
+          <div class="metric-cell">
+            <span class="m-kicker">PRECIPITATION / MOISTURE</span>
+            <b id="ma">0.0 mm/h</b>
+            <span id="ma-sub">Clear · Cloud cover 20%</span>
+          </div>
+          <div class="metric-cell">
+            <span class="m-kicker">AIR TEMP &amp; HEAT INDEX</span>
+            <b id="mt">32°C (+2.6°C)</b>
+            <span id="mfeel">Feels like 35°C</span>
+          </div>
+        </div>
+
+        <!-- Instrument Row: Wind Rose Compass + Hydrological Saturation Gauge -->
+        <div class="inst-row">
+          <div class="wind-box">
+            <canvas id="m-wind-rose" width="84" height="84"></canvas>
+            <div class="wind-meta">
+              <span class="m-kicker">ANEMOMETER</span>
+              <b id="m-wind-val">17 km/h SE</b>
+              <span id="m-wind-sub">Bearing 135° · Gentle breeze</span>
+            </div>
+          </div>
+          <div class="hydro-box">
+            <span class="m-kicker">BASIN SATURATION INDEX</span>
+            <b id="m-hydro-val">34% Normal</b>
+            <div class="gauge-track">
+              <i id="m-hydro-fill" style="width: 34%"></i>
+            </div>
+            <span id="m-hydro-sub">Msimbazi &amp; Coastal Basin</span>
           </div>
         </div>
 
         <div id="modal-chart-wrap">
-          <canvas id="mb" width="460" height="140"></canvas>
-          <div class="sub" id="mpk"></div>
+          <div class="chart-head">
+            <span class="m-kicker" id="m-chart-title">SEASONAL TRAJECTORY (OCT – MAR)</span>
+            <span class="sub" id="mpk"></span>
+          </div>
+          <canvas id="mb" width="460" height="128"></canvas>
         </div>
+
         <ul id="mimp"></ul>
-        <div class="note">
-          Live station data powered by Open-Meteo. Follow official Tanzania Meteorological Authority (TMA) advisories for severe weather warnings.
-        </div>
+
         <div class="row" style="margin-top: 10px">
-          <button id="mpv" class="b">‹ Prev</button>
-          <button id="mnx" class="b">Next ›</button>
-          <button id="mcp" class="b">Copy</button>
+          <button id="mpv" class="b">‹ Prev Station</button>
+          <button id="mnx" class="b">Next Station ›</button>
+          <button id="mcp" class="b">Copy Dossier</button>
+        </div>
+      </div>
+
+      <!-- River Basin Intelligence Card -->
+      <div id="river-modal" class="card" role="dialog" aria-label="River Basin Intelligence" style="display: none;">
+        <div class="grab"></div>
+        <button id="rm-close" aria-label="Close">×</button>
+        <div class="mh">
+          <div>
+            <div class="eyebrow">HYDROLOGICAL CATCHMENT DOSSIER</div>
+            <h2 id="rm-name">Rufiji &amp; Kilombero Basin</h2>
+            <div class="sub" id="rm-sub">Tanzania Hydrological System</div>
+          </div>
+          <div class="pills">
+            <span id="rm-status-pill" class="pill" style="--c: #28c7b8">Normal Flow</span>
+          </div>
+        </div>
+
+        <div class="big-grid">
+          <div class="metric-cell">
+            <span class="m-kicker">CATCHMENT AREA</span>
+            <b id="rm-catchment">177,429 km²</b>
+            <span id="rm-catchment-sub">Drainage Footprint</span>
+          </div>
+          <div class="metric-cell">
+            <span class="m-kicker">MAINSTEM LENGTH</span>
+            <b id="rm-length">600 km</b>
+            <span id="rm-length-sub">Primary Channel</span>
+          </div>
+        </div>
+
+        <div class="rm-body-desc" id="rm-desc"></div>
+
+        <div class="rm-info-block">
+          <div class="rm-info-kicker" style="color: #28c7b8;">⚡ Key Hydro Infrastructure</div>
+          <div id="rm-hydro" class="rm-info-val"></div>
+        </div>
+
+        <div class="rm-info-block">
+          <div class="rm-info-kicker" style="color: #e59a3c;">🌊 Outlet &amp; Estuary</div>
+          <div id="rm-outlet" class="rm-info-val"></div>
+        </div>
+
+        <div class="row" style="margin-top: 12px">
+          <button id="rm-btn-source" class="b">Fly to Headwaters</button>
+          <button id="rm-btn-focus" class="b">Fly to Delta / Mouth</button>
+          <button id="rm-btn-close2" class="b">Close</button>
+        </div>
+      </div>
+
+      <!-- Floating Field Probe Mini-Card when clicking any terrain spot -->
+      <div id="probe-card" class="card" role="region" aria-label="Terrain Point Probe" hidden>
+        <button id="pc-close" aria-label="Dismiss probe">×</button>
+        <div class="pc-head">
+          <span class="eyebrow" id="pc-coords">6.12°S, 35.40°E · 1,140m</span>
+          <strong id="pc-biome">Central Plateau Savanna</strong>
+        </div>
+        <div class="pc-metrics">
+          <div>
+            <span class="m-kicker">TEMP</span>
+            <b id="pc-temp">28°C</b>
+            <small id="pc-feel">Feels 29°C</small>
+          </div>
+          <div>
+            <span class="m-kicker">MOISTURE</span>
+            <b id="pc-rain">0.0 mm/h</b>
+            <small id="pc-cond">Clear sky</small>
+          </div>
+          <div>
+            <span class="m-kicker">WIND</span>
+            <b id="pc-wind">14 km/h</b>
+            <small id="pc-dir">ESE (112°)</small>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 8px; margin-bottom: 0;">
+          <button id="pc-zoom" class="b">Inspect Terrain Spot</button>
         </div>
       </div>
     </div>

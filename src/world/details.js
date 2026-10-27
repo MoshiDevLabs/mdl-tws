@@ -49,12 +49,16 @@ export function buildWorldDetails(scene, waterUniforms) {
       if (signedLandDist(x, z) < 0.06 || signedLakeDist(x, z) > -0.08) continue;
 
       const centerFactor = 1.0 - r / (rad + 0.01);
-      const bh = (0.18 + Math.pow(centerFactor, 2.2) * maxH * (0.45 + 0.55 * rnd())) * 0.72;
-      const bw = 0.09 + rnd() * 0.11 + centerFactor * 0.05;
-      const bd = 0.09 + rnd() * 0.11 + centerFactor * 0.05;
+      const tier = centerFactor > 0.65 ? 2 : centerFactor > 0.32 ? 1 : 0;
+      const bh = (0.16 + Math.pow(centerFactor, 2.0) * maxH * (0.48 + 0.52 * rnd())) * 0.76;
+      const bw = (tier === 2 ? 0.11 : 0.08) + rnd() * 0.1 + centerFactor * 0.04;
+      const bd = (tier === 2 ? 0.11 : 0.08) + rnd() * 0.1 + centerFactor * 0.04;
       const rot = (Math.floor(rnd() * 4) * Math.PI) / 2 + (rnd() - 0.5) * 0.18;
-      const baseH = relief(x, z);
-      bldgData.push({ x, z, baseH, bw, bh, bd, rot, tone: 0.75 + rnd() * 0.25 });
+      // Keep coastal cities (Dar, Tanga, Zanzibar, Mtwara) near coastal plain elevation
+      const rawH = relief(x, z);
+      const isCoastalHub = lo > 38.8 && la < -4.5;
+      const baseH = isCoastalHub ? Math.min(rawH, 0.55 + rawH * 0.28) : rawH;
+      bldgData.push({ x, z, baseH, bw, bh, bd, rot, tier, tone: 0.75 + rnd() * 0.25 });
     }
   });
 
@@ -69,6 +73,7 @@ export function buildWorldDetails(scene, waterUniforms) {
 
   bldgMat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = waterUniforms.uT;
+    sh.uniforms.uNight = waterUniforms.uNight || { value: 0.0 };
     sh.vertexShader = sh.vertexShader
       .replace(
         '#include <common>',
@@ -86,6 +91,7 @@ export function buildWorldDetails(scene, waterUniforms) {
       .replace(
         '#include <common>',
         `#include <common>
+        uniform float uNight;
         varying vec3 vLocalPos;
         varying vec3 vBldgNorm;`
       )
@@ -98,11 +104,23 @@ export function buildWorldDetails(scene, waterUniforms) {
           float wy = step(0.38, fract(vLocalPos.y * 9.0));
           float win = wx * wy;
           vec3 wallCol = diffuseColor.rgb * (0.65 + 0.35 * vLocalPos.y);
-          vec3 winGlow = vec3(1.0, 0.86, 0.58);
-          diffuseColor.rgb = mix(wallCol, winGlow, win * 0.55);
+          vec3 dayWin = vec3(1.0, 0.86, 0.58);
+          vec3 nightWin = vec3(1.6, 1.25, 0.75);
+          vec3 winCol = mix(dayWin, nightWin, uNight);
+          diffuseColor.rgb = mix(wallCol, winCol, win * mix(0.55, 0.95, uNight));
         } else {
           // Rooftop concrete
           diffuseColor.rgb *= 0.82;
+        }`
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        // High-realism nocturnal window emission for Tanzanian cities
+        if (abs(vBldgNorm.y) < 0.5 && uNight > 0.05) {
+          float wx = step(0.32, fract(vLocalPos.x * 5.0 + vLocalPos.z * 5.0));
+          float wy = step(0.38, fract(vLocalPos.y * 9.0));
+          totalEmissiveRadiance += vec3(1.5, 1.05, 0.52) * (wx * wy) * (uNight * 2.2);
         }`
       );
   };
@@ -114,11 +132,26 @@ export function buildWorldDetails(scene, waterUniforms) {
   const cTmp = new THREE.Color();
 
   bldgData.forEach((b, i) => {
-    cTmp.setRGB(0.76 * b.tone, 0.84 * b.tone, 0.92 * b.tone);
+    if (b.tier === 2) {
+      // Modern glass & anodized slate CBD high-rise
+      cTmp.setRGB(0.68 * b.tone, 0.84 * b.tone, 0.95 * b.tone);
+    } else if (b.tier === 1) {
+      // Warm coral-stone / plaster commercial mid-rise
+      cTmp.setRGB(0.92 * b.tone, 0.86 * b.tone, 0.76 * b.tone);
+    } else {
+      // Laterite terracotta & coastal peri-urban blocks
+      cTmp.setRGB(0.88 * b.tone, 0.74 * b.tone, 0.64 * b.tone);
+    }
     bldgMesh.setColorAt(i, cTmp);
   });
   if (bldgMesh.instanceColor) bldgMesh.instanceColor.needsUpdate = true;
   detailsGroup.add(bldgMesh);
+
+  // Precompute urban hub centers in world space so trees don't spawn inside city cores or dwarf skyscrapers
+  const hubXZ = cityHubs.map(([lo, la, , , rad]) => {
+    const [hx, hz] = wp(lo, la);
+    return { x: hx, z: hz, rad: rad || 1.1 };
+  });
 
   // ============================================================================
   // 2. 3D INSTANCED FORESTS & SAVANNA TREES (~7,200 3D trees in 2 draw calls)
@@ -145,8 +178,23 @@ export function buildWorldDetails(scene, waterUniforms) {
       (lo > 37.8 && patch > 0.02) ||
       (la > -3.5 && lo < 33.5 && patch > 0.0);
 
+    // Exclude dense city cores and scale down trees near urban perimeters
+    let minUrbanFactor = 1.0;
+    for (let hi = 0; hi < hubXZ.length; hi++) {
+      const hb = hubXZ[hi];
+      const d = Math.hypot(x - hb.x, z - hb.z);
+      if (d < hb.rad * 0.68) {
+        minUrbanFactor = 0;
+        break;
+      }
+      if (d < hb.rad * 1.6) {
+        minUrbanFactor = Math.min(minUrbanFactor, 0.48 + 0.52 * ((d - hb.rad * 0.68) / (hb.rad * 0.92)));
+      }
+    }
+    if (minUrbanFactor <= 0.01) continue;
+
     if (isForestZone && montaneTrees.length < 4500) {
-      const sc = 0.22 + rnd() * 0.26;
+      const sc = (0.18 + rnd() * 0.21) * minUrbanFactor;
       montaneTrees.push({
         x,
         z,
@@ -157,7 +205,7 @@ export function buildWorldDetails(scene, waterUniforms) {
       });
     } else if (patch > 0.06 && savannaTrees.length < 2700) {
       // Acacia & Baobab savanna woodland across Serengeti, Ruaha, Tarangire & Central Plateau
-      const sc = 0.20 + rnd() * 0.24;
+      const sc = (0.16 + rnd() * 0.19) * minUrbanFactor;
       savannaTrees.push({
         x,
         z,
