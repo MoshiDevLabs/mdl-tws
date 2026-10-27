@@ -189,7 +189,5 @@ Share direct links to specific scenarios, cities, 3D landmark camera angles, or 
 
 ---
 
-## 🤝 Contributors & Credits
-- **Lead Developer & Creator**: **[MoshiDevLabs](https://github.com/MoshiDevLabs)**
-- **AI Architecture, Shaders & Engineering Co-Contributors**: **Gemini** & **Claude Sonnet (Thinking)**
+**Designed & Engineered by [MoshiDevLabs](https://github.com/MoshiDevLabs)**
 
