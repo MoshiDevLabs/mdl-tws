@@ -10,13 +10,11 @@ import * as THREE from 'three';
 import { makeNoise } from './noise.js';
 import { RINGS, LAKES, relief } from './terrain.js';
 import { R } from '../data/climate.js';
+import { getCountry } from '../data/countries/index.js';
 
 const { fbm, ridged: rmf } = makeNoise(77);
 
-const LON_MIN = 27.0;
-const LON_SPAN = 16.0; // 27.0°E -> 43.0°E
-const LAT_MAX = 1.7;
-const LAT_SPAN = 16.0; // +1.7°N -> -14.3°S
+const satTexCache = {};
 
 function latFromTileY(ty, n) {
   const rad = Math.atan(Math.sinh(Math.PI * (1 - (2 * ty) / n)));
@@ -24,6 +22,16 @@ function latFromTileY(ty, n) {
 }
 
 export function createSatelliteTexture(renderer) {
+  const country = getCountry();
+  if (satTexCache[country.id]) {
+    return satTexCache[country.id];
+  }
+
+  const LON_MIN = country.lonMin;
+  const LON_SPAN = country.lonSpan;
+  const LAT_MAX = country.latMax;
+  const LAT_SPAN = country.latSpan;
+
   const SIZE = 1024;
   const canvas = document.createElement('canvas');
   canvas.width = SIZE;
@@ -112,29 +120,56 @@ export function createSatelliteTexture(renderer) {
       const n2 = fbm(x * 0.85 - 11.2, z * 0.85 + 7.8, 3);
       const ridge = rmf(x * 0.45, z * 0.45, 3);
 
-      // Ecological zones across all of Tanzania:
-      // - Coastal & Selous/Ruvuma (East & South-East): lush tropical & miombo green
-      // - Lake Victoria & Western Tanganyika/Katavi: emerald woodland
-      // - Southern Highlands (Mbeya, Iringa, Songea): rich montane forest & grassland
-      // - Central Dodoma/Singida & Serengeti: warm golden-olive savanna
-      const coastalLush = Math.max(0, Math.min(1, (lon - 36.2) / 3.4));
-      const vicLush = Math.exp(-((lon - 32.2) ** 2 + (lat + 2.2) ** 2) / 7.5);
-      const westLush = Math.exp(-((lon - 30.8) ** 2 + (lat + 5.8) ** 2) / 9.0);
-      const southLush = Math.exp(-((lon - 35.5) ** 2 + (lat + 9.5) ** 2) / 14.0);
-      const aridCore = Math.exp(-((lon - 35.0) ** 2 + (lat + 5.4) ** 2) / 6.5);
-      const vegIndex = Math.max(
-        0.15,
-        Math.min(
-          0.95,
-          0.44 +
-            coastalLush * 0.38 +
-            vicLush * 0.35 +
-            westLush * 0.32 +
-            southLush * 0.38 -
-            aridCore * 0.36 +
-            (n1 - 0.5) * 0.32
-        )
-      );
+      let vegIndex;
+      if (country.id === 'ke') {
+        // Ecological zones across Kenya:
+        // - Swahili Coast (Mombasa, Malindi, Lamu): tropical coastal green
+        // - Central Highlands (Mt Kenya, Aberdares, Nairobi) & Mau Escarpment: rich montane emerald forest
+        // - Lake Victoria / Nyanza & Western (Kisumu, Kakamega, Mt Elgon): lush equatorial green
+        // - Turkana / Chalbi Desert (North-West) & Garissa / Wajir ASAL (North-East): golden-ochre semi-arid savanna
+        const keCoast = Math.max(0, Math.min(1, (lon - 38.8) / 2.2)) * Math.max(0, Math.min(1, (-lat + 0.5) / 5.0));
+        const keHighlands = Math.exp(-((lon - 36.8) ** 2 + (lat + 0.3) ** 2) / 3.8);
+        const keWest = Math.exp(-((lon - 34.8) ** 2 + (lat - 0.3) ** 2) / 3.5);
+        const keAridNorth = Math.max(0, Math.min(1, (lat - 1.2) / 2.8));
+        const keAridEast = Math.max(0, Math.min(1, (lon - 38.2) / 2.6)) * Math.max(0, Math.min(1, (lat + 1.5) / 3.5));
+        vegIndex = Math.max(
+          0.14,
+          Math.min(
+            0.95,
+            0.40 +
+              keCoast * 0.38 +
+              keHighlands * 0.48 +
+              keWest * 0.44 -
+              keAridNorth * 0.32 -
+              keAridEast * 0.28 +
+              (n1 - 0.5) * 0.30
+          )
+        );
+      } else {
+        // Ecological zones across all of Tanzania:
+        // - Coastal & Selous/Ruvuma (East & South-East): lush tropical & miombo green
+        // - Lake Victoria & Western Tanganyika/Katavi: emerald woodland
+        // - Southern Highlands (Mbeya, Iringa, Songea): rich montane forest & grassland
+        // - Central Dodoma/Singida & Serengeti: warm golden-olive savanna
+        const coastalLush = Math.max(0, Math.min(1, (lon - 36.2) / 3.4));
+        const vicLush = Math.exp(-((lon - 32.2) ** 2 + (lat + 2.2) ** 2) / 7.5);
+        const westLush = Math.exp(-((lon - 30.8) ** 2 + (lat + 5.8) ** 2) / 9.0);
+        const southLush = Math.exp(-((lon - 35.5) ** 2 + (lat + 9.5) ** 2) / 14.0);
+        const aridCore = Math.exp(-((lon - 35.0) ** 2 + (lat + 5.4) ** 2) / 6.5);
+        vegIndex = Math.max(
+          0.15,
+          Math.min(
+            0.95,
+            0.44 +
+              coastalLush * 0.38 +
+              vicLush * 0.35 +
+              westLush * 0.32 +
+              southLush * 0.38 -
+              aridCore * 0.36 +
+              (n1 - 0.5) * 0.32
+          )
+        );
+      }
 
       let r, g, b;
       if (h < 0.32) {
@@ -211,15 +246,13 @@ export function createSatelliteTexture(renderer) {
   if (renderer && renderer.capabilities) {
     satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   }
+  satTexCache[country.id] = satTex;
 
   // 3. Asynchronously fetch & composite real Web-Mercator satellite tiles (Esri ArcGIS World Imagery)
   // Gamma-correct & shadow-lift every satellite pixel so dark forests or ocean edges NEVER create dark patches!
   const Z = 6;
   const N = 1 << Z;
-  const txMin = 36,
-    txMax = 39;
-  const tyMin = 31,
-    tyMax = 34;
+  const [txMin, txMax, tyMin, tyMax] = country.tileBoundsZ6 || [36, 39, 31, 34];
 
   const tileLayer = document.createElement('canvas');
   tileLayer.width = SIZE;

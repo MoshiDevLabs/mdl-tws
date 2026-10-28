@@ -12,13 +12,17 @@ import {
   heatIndexC,
   sampleWind,
   sampleLiveWeather,
+  getStationLiveWeather,
+  getStationHourlySeries,
+  getForecastTimeLabel,
   getRainTier,
   getImpacts,
   wp,
   unwp,
   clamp,
 } from '../data/climate.js';
-import { liveState } from '../data/liveWeather.js';
+import { getCountry } from '../data/countries/index.js';
+import { getLiveState } from '../data/liveWeather.js';
 import { relief } from '../world/terrain.js';
 import { RIVER_PATHS } from '../world/rivers.js';
 import { REGION_LANDMARK_META } from '../world/landmarks.js';
@@ -28,6 +32,8 @@ export const fmtPct = (a) => (a >= 0 ? '+' : '') + Math.round(a) + '%';
 export const fmtTempAnom = (t) => (t >= 0 ? '+' : '') + t.toFixed(1) + '°C';
 export const fmtDeg = (t) => Math.round(t) + '°C';
 export const fmtMm = (mm) => (mm >= 0.08 ? `${mm.toFixed(1)} mm/h` : '0.0 mm/h');
+export const fmtLat = (lat) =>
+  lat >= 0 ? `${lat.toFixed(2)}°N` : `${Math.abs(lat).toFixed(2)}°S`;
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 export const degToCompass = (d) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
@@ -42,7 +48,16 @@ function beaufortLabel(kmh) {
 }
 
 function classifyBiome(lon, lat, elevM) {
+  const country = getCountry();
   if (elevM > 3200) return 'Alpine Volcanic Zone';
+  if (country.id === 'ke') {
+    if (lat > 1.8 && lon < 37.8) return 'Turkana Rift & Jade Sea Arid Basin';
+    if (lon > 39.0 && lat < -1.2 && elevM < 280) return 'Swahili Coastal Strip & Creek';
+    if (lon > 38.2 && lat > -1.0) return 'Northeastern ASAL & Tana Plains';
+    if (elevM > 1650) return 'Central & Rift Valley Montane Highlands';
+    if (lon < 35.3 && lat < 0.8) return 'Lake Victoria Nyanza Basin';
+    return 'Kenyan Highland Plateau & Savanna';
+  }
   if (elevM > 1650 && lat < -7.5) return 'Southern Highlands Escarpment';
   if (elevM > 1500 && lat > -4.5) return 'Northern Volcanic Highlands';
   if (lon > 38.7 && elevM < 260) return 'Swahili Coastal Plain & Estuary';
@@ -66,6 +81,18 @@ export function initHUD(state, sites, callbacks) {
   function rebuildCurves() {
     rainCurve.length = 0;
     tempCurve.length = 0;
+    if (state.scenario === 'live') {
+      for (let h = 0; h <= 24; h++) {
+        const tm = (h / 24) * 6;
+        const rAvg =
+          sites.reduce((acc, s) => acc + getStationLiveWeather(s.i, tm).rainA, 0) / sites.length;
+        const tAvg =
+          sites.reduce((acc, s) => acc + getStationLiveWeather(s.i, tm).tempA, 0) / sites.length;
+        rainCurve.push(rAvg);
+        tempCurve.push(tAvg);
+      }
+      return;
+    }
     for (let m = 0; m < 6; m += 0.15) {
       const rAvg =
         sites.reduce((acc, s) => acc + rainAnomaly(s.x, s.z, m, state.nino, state.scenario), 0) /
@@ -97,18 +124,38 @@ export function initHUD(state, sites, callbacks) {
     return b;
   });
 
-  // Populate the 9 Tanzanian River Basins tab in the dock
-  const basinButtons = RIVER_PATHS.map((rv) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.style.setProperty('--c', '#28c7b8');
-    b.innerHTML = `<div><span class="r-name">${rv.name}</span><span class="r-sub">${rv.basinName} · ${rv.catchmentKm2}</span></div><span class="r-stats"><em class="r-flow">${rv.lengthKm}</em></span>`;
-    b.onclick = () => {
-      if (callbacks.openRiverBasin) callbacks.openRiverBasin(rv);
-    };
-    if (basinListEl) basinListEl.appendChild(b);
-    return { btn: b, rv };
-  });
+  let basinButtons = [];
+  function populateBasinButtons() {
+    if (basinListEl) basinListEl.innerHTML = '';
+    basinButtons = RIVER_PATHS.map((rv) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.setProperty('--c', '#28c7b8');
+      b.innerHTML = `<div><span class="r-name">${rv.name}</span><span class="r-sub">${rv.basinName} · ${rv.catchmentKm2}</span></div><span class="r-stats"><em class="r-flow">${rv.lengthKm}</em></span>`;
+      b.onclick = () => {
+        if (callbacks.openRiverBasin) callbacks.openRiverBasin(rv);
+      };
+      if (basinListEl) basinListEl.appendChild(b);
+      return { btn: b, rv };
+    });
+  }
+  populateBasinButtons();
+
+  function rebuildCountryHUD() {
+    lastOrderKey = '';
+    sites.forEach((s) => {
+      const meta = REGION_LANDMARK_META[s.i];
+      const b = listButtons[s.i];
+      if (!b) return;
+      const nameEl = b.querySelector('.r-name');
+      const subEl = b.querySelector('.r-sub');
+      if (nameEl) nameEl.textContent = s.n;
+      if (subEl) subEl.textContent = meta ? meta.landmarkName : s.note;
+    });
+    populateBasinButtons();
+    rebuildCurves();
+    updateScenarioHeader();
+  }
 
   function toast(msg) {
     const e = $('toast');
@@ -119,26 +166,46 @@ export function initHUD(state, sites, callbacks) {
   }
 
   function updateScenarioHeader() {
+    const country = getCountry();
+    const ls = getLiveState();
     const sc = SCENARIOS[state.scenario] || SCENARIOS.live;
+    if ($('inst-tag')) $('inst-tag').textContent = country.agencyTag;
+    document.title = `Mdl TWS — ${country.name} 3D Synoptic Weather & Hydrological Atlas`;
     $('scen-title').textContent =
       state.scenario === 'live'
-        ? 'Tanzania 3D Interactive Weather & Basin System'
-        : `Tanzania 3D Synoptic Atlas · ${sc.title}`;
-    $('scen-note').textContent = sc.note;
+        ? country.subtitle
+        : `${country.name} 3D Synoptic Atlas · ${sc.title}`;
+    $('scen-note').textContent =
+      state.scenario === 'live'
+        ? `Current real-time weather across ${country.name} (${country.agencyName}) fetched via Open-Meteo. Switch scenarios above to simulate El Niño floods or a Tropical Cyclone.`
+        : sc.note;
 
     const isLive = state.scenario === 'live';
-    if ($('sim-controls')) $('sim-controls').hidden = isLive;
+    if ($('sim-controls')) $('sim-controls').hidden = false;
+    if ($('intensity-wrap')) $('intensity-wrap').hidden = isLive;
+    if ($('btn-now')) {
+      $('btn-now').hidden = !isLive;
+      $('btn-now').classList.toggle('on', state.tm <= 0.05);
+    }
 
     if (isLive) {
+      const fTime = getForecastTimeLabel(state.tm);
       const stTxt =
-        liveState.status === 'live'
-          ? `● Open-Meteo Live (${liveState.updatedAt})`
-          : liveState.status === 'loading'
-          ? 'Syncing 27 live Tanzanian stations…'
-          : `Station telemetry (${liveState.updatedAt || 'ready'})`;
+        ls.status === 'live'
+          ? fTime.isNow
+            ? `● Open-Meteo Live (${ls.updatedAt})`
+            : `🔮 +${fTime.hourOffset}h Forecast (${fTime.clockLabel})`
+          : ls.status === 'loading'
+          ? `Syncing 27 live ${country.name} stations + 24h forecast…`
+          : `Station telemetry (${ls.updatedAt || 'ready'})`;
       $('bdg-main').textContent = stTxt;
-      $('bdg-sub').textContent = sc.hotBadge;
+      $('bdg-sub').textContent = fTime.isNow
+        ? 'Live weather now · Scrub below for 24h forecast'
+        : `Open-Meteo 24h Forecast · ${fTime.clockLabel}`;
       $('btn-refresh').hidden = false;
+      $('tm-range-lbl').textContent = fTime.isNow
+        ? `Now → +24h Forecast (${fTime.clockLabel})`
+        : `+${fTime.hourOffset}h · ${fTime.clockLabel}`;
     } else {
       $('bdg-main').textContent = sc.badge;
       $('bdg-sub').textContent = sc.hotBadge;
@@ -149,11 +216,15 @@ export function initHUD(state, sites, callbacks) {
     document.querySelectorAll('.scen-btn').forEach((b) => {
       b.classList.toggle('on', b.dataset.sc === state.scenario);
     });
+    document.querySelectorAll('.country-btn').forEach((b) => {
+      b.classList.toggle('on', b.dataset.country === country.id);
+    });
   }
 
   function updateButtonsUI() {
+    const isLive = state.scenario === 'live';
     $('auto').textContent = state.auto ? 'Auto camera on' : 'Auto camera off';
-    $('ply').textContent = state.playing ? 'Pause' : 'Play';
+    $('ply').textContent = state.playing ? 'Pause' : isLive ? 'Play 24h' : 'Play';
     $('spd').textContent = state.speed + 'x';
     document.querySelectorAll('.mode-btn[data-m]').forEach((b) => {
       b.classList.toggle('on', b.dataset.m === state.dataMode);
@@ -248,6 +319,8 @@ export function initHUD(state, sites, callbacks) {
     pcCtx.fillStyle = g;
     pcCtx.fillRect(0, 0, W, H);
 
+    const country = getCountry();
+    const ls = getLiveState();
     // Mdl TWS reference box
     pcCtx.fillStyle = 'rgba(40, 199, 184, 0.14)';
     pcCtx.fillRect(20, 34, 72, 46);
@@ -255,24 +328,28 @@ export function initHUD(state, sites, callbacks) {
     pcCtx.strokeRect(20, 34, 72, 46);
     pcCtx.fillStyle = '#f2efe9';
     pcCtx.font = '600 12.5px Space Grotesk, sans-serif';
-    pcCtx.fillText('TANZANIA', 23, 24);
+    pcCtx.fillText(country.name.toUpperCase(), 23, 24);
     pcCtx.fillStyle = '#28c7b8';
     pcCtx.font = '500 11px JetBrains Mono, monospace';
     pcCtx.fillText('27 Stns', 31, 61);
 
     if (state.scenario === 'live') {
+      const fTime = getForecastTimeLabel(state.tm);
       const avgWind = sites.reduce((a, s) => a + s.windKmh, 0) / sites.length;
       const maxTemp = Math.max(...sites.map((s) => s.absTemp));
       const minTemp = Math.min(...sites.map((s) => s.absTemp));
-      const rainingCount = liveState.stations.filter(
-        (st) => st.precipMm >= 0.08 || st.weatherCode >= 51
-      ).length;
+      const rainingCount = ls.stations.filter((_, idx) => {
+        const snap = getStationLiveWeather(idx, state.tm);
+        return snap.isRaining;
+      }).length;
 
-      pcCtx.fillStyle = '#5ef2d6';
+      pcCtx.fillStyle = fTime.isNow ? '#5ef2d6' : '#e59a3c';
       pcCtx.font = '600 13px JetBrains Mono, monospace';
       pcCtx.fillText(
-        liveState.status === 'live'
-          ? '● LIVE OPEN-METEO SATELLITE & STATIONS'
+        ls.status === 'live'
+          ? fTime.isNow
+            ? `● LIVE OPEN-METEO (${country.name.toUpperCase()})`
+            : `🔮 +${fTime.hourOffset}H FORECAST · ${fTime.clockLabel}`
           : '● LIVE TELEMETRY FEED',
         106,
         26
@@ -284,9 +361,15 @@ export function initHUD(state, sites, callbacks) {
         106,
         50
       );
-      pcCtx.fillText(`Mean wind: ${Math.round(avgWind)} km/h · 3D Landmarks active`, 106, 72);
+      pcCtx.fillText(`Mean wind: ${Math.round(avgWind)} km/h · 24h Hourly Forecast`, 106, 72);
       pcCtx.fillStyle = '#94a7b8';
-      pcCtx.fillText(`Synced: ${liveState.updatedAt || 'Now'}`, 106, 94);
+      pcCtx.fillText(
+        fTime.isNow
+          ? `Synced: ${ls.updatedAt || 'Now'} · Scrub for +24h`
+          : `Showing ${fTime.fullLabel} · Synced ${ls.updatedAt || 'Now'}`,
+        106,
+        94
+      );
       return;
     }
 
@@ -357,7 +440,7 @@ export function initHUD(state, sites, callbacks) {
     const isLive = state.scenario === 'live';
     const meta = REGION_LANDMARK_META[s.i] || REGION_LANDMARK_META[0];
 
-    const latStr = `${Math.abs(s.lat).toFixed(2)}°S`;
+    const latStr = fmtLat(s.lat);
     const lonStr = `${s.lon.toFixed(2)}°E`;
     if ($('m-coords')) {
       $('m-coords').textContent = `${latStr}, ${lonStr} · ELEV ${s.elevM}m`;
@@ -383,7 +466,8 @@ export function initHUD(state, sites, callbacks) {
     if (isLive) {
       $('ma').textContent = fmtMm(s.precipMm || 0);
       $('ma').style.color = s.isRaining ? '#28c7b8' : '#58c496';
-      $('ma-sub').textContent = `${s.isRaining ? s.weatherDesc : 'Dry condition'} · Clouds ${Math.round(
+      const probTxt = typeof s.precipProb === 'number' ? ` · Rain prob ${Math.round(s.precipProb)}%` : '';
+      $('ma-sub').textContent = `${s.isRaining ? s.weatherDesc : 'Dry condition'}${probTxt} · Clouds ${Math.round(
         s.cloudCover || 0
       )}%`;
     } else {
@@ -436,41 +520,62 @@ export function initHUD(state, sites, callbacks) {
       .map((t) => `<li>${t}</li>`)
       .join('');
 
-    // Draw Trajectory Chart in #mb (supports both Live 24h Diurnal Profile & Seasonal Oct-Mar)
+    // Draw Trajectory Chart in #mb (Real 24-Hour Open-Meteo Forecast in Live mode, Seasonal Oct-Mar in Sim mode)
     if ($('modal-chart-wrap')) $('modal-chart-wrap').hidden = false;
+    const forecastSteps = [0, 4, 8, 12, 18, 24];
+    const series = isLive ? getStationHourlySeries(s.i) : null;
     const labels = isLive ? ['Now', '+4h', '+8h', '+12h', '+18h', '+24h'] : MONTHS;
+    const fTime = isLive ? getForecastTimeLabel(state.tm) : null;
     if ($('m-chart-title')) {
       $('m-chart-title').textContent = isLive
-        ? '24-HOUR DIURNAL STATION PROFILE'
+        ? `24-HOUR OPEN-METEO FORECAST (${fTime.shortLabel.toUpperCase()})`
         : 'SEASONAL TRAJECTORY (OCT – MAR)';
     }
 
     const hVal = relief(s.x, s.z);
     const rVals = [0, 1, 2, 3, 4, 5].map((m) => {
       if (isLive) {
-        const baseP = s.precipMm || 0;
-        const cloudTerm = ((s.cloudCover || 20) - 30) * 0.5;
-        return clamp(
-          baseP * 25 + cloudTerm + Math.sin(m * 1.1 + s.i) * 16,
-          -35,
-          115
-        );
+        const hSlot = series[forecastSteps[m]] || series[0];
+        const pMm = hSlot.precipMm || 0;
+        const pProb = hSlot.precipProb || 0;
+        const cCov = hSlot.cloudCover || 20;
+        return pMm >= 0.05
+          ? clamp(24 + pMm * 28 + pProb * 0.35, 18, 120)
+          : clamp((pProb - 25) * 0.55 + (cCov - 45) * 0.35, -35, 25);
       }
       return rainAnomaly(s.x, s.z, m + 0.4, state.nino, state.scenario);
     });
 
     const tVals = [0, 1, 2, 3, 4, 5].map((m) => {
       if (isLive) {
-        const diurnal = Math.sin(((m - 1) / 6) * Math.PI * 2) * 3.2;
-        return s.absTemp + diurnal;
+        const hSlot = series[forecastSteps[m]] || series[0];
+        return hSlot.tempC;
       }
       return actualTempC(s.x, s.z, hVal, m + 0.4, state.nino, state.scenario);
     });
 
-    const pkRain = rVals.reduce((b, x, i) => (Math.abs(x) > Math.abs(rVals[b]) ? i : b), 0);
+    const pkRain = rVals.reduce((b, x, i) => (x > rVals[b] ? i : b), 0);
     const pkTemp = tVals.reduce((b, x, i) => (x > tVals[b] ? i : b), 0);
 
-    $('mpk').textContent = `Peak: ${labels[pkRain]} · Max ${fmtDeg(tVals[pkTemp])}`;
+    if (isLive) {
+      const maxProb = Math.max(...forecastSteps.map((h) => (series[h] ? series[h].precipProb || 0 : 0)));
+      $('mpk').textContent = `Rain prob peak: ${Math.round(maxProb)}% (${labels[pkRain]}) · Max ${fmtDeg(
+        tVals[pkTemp]
+      )}`;
+    } else {
+      $('mpk').textContent = `Peak: ${labels[pkRain]} · Max ${fmtDeg(tVals[pkTemp])}`;
+    }
+
+    // Determine which of the 6 columns corresponds to current state.tm
+    const activeCol = isLive
+      ? forecastSteps.reduce(
+          (bestIdx, hStep, idx) =>
+            Math.abs(hStep - fTime.hourOffset) < Math.abs(forecastSteps[bestIdx] - fTime.hourOffset)
+              ? idx
+              : bestIdx,
+          0
+        )
+      : Math.floor(state.tm);
 
     const c = $('mb').getContext('2d');
     const W = 460,
@@ -489,7 +594,7 @@ export function initHUD(state, sites, callbacks) {
       const bx = 18 + m * 74;
       c.fillStyle = x < 0 ? 'rgba(229, 154, 60, 0.75)' : 'rgba(40, 199, 184, 0.78)';
       c.fillRect(bx, h >= 0 ? mid - h : mid, 44, Math.abs(h) || 2);
-      if (!isLive && m === Math.floor(state.tm)) {
+      if (m === activeCol) {
         c.strokeStyle = '#f2efe9';
         c.lineWidth = 1.5;
         c.strokeRect(bx - 3, 4, 50, H - 24);
@@ -529,16 +634,28 @@ export function initHUD(state, sites, callbacks) {
     if (hudTimer > 0 && !force) return;
     hudTimer = 0.2;
 
-    const mi = Math.floor(state.tm);
+    const mi = clamp(Math.floor(state.tm), 0, 5);
     const isLive = state.scenario === 'live';
-    const timeLabel = isLive ? 'Right Now' : `${MONTHS[mi]} '${mi < 3 ? '26' : '27'}`;
+    const fTime = isLive ? getForecastTimeLabel(state.tm) : null;
+    const timeLabel = isLive
+      ? fTime.isNow
+        ? 'Live Now'
+        : `+${fTime.hourOffset}h`
+      : `${MONTHS[mi]} '${mi < 3 ? '26' : '27'}`;
 
     $('mv').textContent = timeLabel;
-    $('mv-sub').textContent = isLive ? 'Current weather' : 'Season timeline';
+    $('mv-sub').textContent = isLive
+      ? fTime.isNow
+        ? `Current (${fTime.clockLabel})`
+        : `Forecast · ${fTime.clockLabel}`
+      : 'Season timeline';
 
     if (isLive) {
-      $('mr').textContent = liveState.status === 'live' ? '● LIVE' : 'Ready';
-      $('mr-sub').textContent = 'Open-Meteo API';
+      const ls = getLiveState();
+      $('mr').textContent =
+        ls.status === 'live' ? (fTime.isNow ? '● LIVE' : `+${fTime.hourOffset}H`) : 'Ready';
+      $('mr-sub').textContent = fTime.isNow ? 'Open-Meteo Live' : '24h Forecast';
+      if ($('btn-now')) $('btn-now').classList.toggle('on', fTime.isNow);
     } else if (state.scenario === 'cyclone') {
       const maxGust = Math.max(...sites.map((s) => s.windKmh));
       $('mr').textContent = `${Math.round(maxGust)} km/h`;
@@ -555,7 +672,9 @@ export function initHUD(state, sites, callbacks) {
     if (isLive) {
       const rainingHubs = sites.filter((s) => s.isRaining).length;
       $('mc').textContent = `${rainingHubs}/${sites.length}`;
-      $('mc-sub').textContent = 'Cities raining now';
+      $('mc-sub').textContent = fTime.isNow
+        ? 'Cities raining now'
+        : `Cities raining (+${fTime.hourOffset}h)`;
     } else {
       $('mc').textContent = sites.filter((s) => s.rainSt >= 2).length;
       $('mc-sub').textContent = 'Wetter regions';
@@ -661,7 +780,7 @@ export function initHUD(state, sites, callbacks) {
       const [lon, lat] = unwp(px, pz);
       const elevM = Math.max(5, Math.round(h * 1120));
       const biome = classifyBiome(lon, lat, elevM);
-      const coordStr = `${Math.abs(lat).toFixed(2)}°S, ${lon.toFixed(2)}°E · ${elevM}m`;
+      const coordStr = `${fmtLat(lat)}, ${lon.toFixed(2)}°E · ${elevM}m`;
 
       if (probeCard && state.cur < 0) {
         probeCard.hidden = false;
@@ -711,6 +830,7 @@ export function initHUD(state, sites, callbacks) {
 
   return {
     rebuildCurves,
+    rebuildCountryHUD,
     drawPacificDiagram,
     drawModal,
     updateHUD,

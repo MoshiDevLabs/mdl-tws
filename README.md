@@ -1,20 +1,20 @@
-# Mdl TWS — Tanzania 3D Synoptic Weather & Hydrological Atlas
+# Mdl TWS — East Africa (🇹🇿 Tanzania & 🇰🇪 Kenya) 3D Synoptic Weather & Hydrological Atlas
 
-![Version](https://img.shields.io/badge/version-3.0.0-28c7b8?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.1.0-28c7b8?style=flat-square)
 ![Three.js](https://img.shields.io/badge/Three.js-r186%20%7C%20WebGL2-0b1724?style=flat-square&logo=threedotjs&logoColor=28c7b8)
 ![Vite](https://img.shields.io/badge/Vite-8.3-0b1724?style=flat-square&logo=vite&logoColor=e59a3c)
-![Open-Meteo](https://img.shields.io/badge/Telemetry-Open--Meteo%20Live%20API-28c7b8?style=flat-square)
+![Open-Meteo](https://img.shields.io/badge/Telemetry-Open--Meteo%20Live%20%2B%2024h%20Forecast-28c7b8?style=flat-square)
 ![Shaders](https://img.shields.io/badge/GLSL-Custom%20PBR%20%26%20Ocean%20Shaders-e0533c?style=flat-square)
 
-> **Real-time East African meteorological telemetry, 3D topographic & satellite relief, hydrological river-basin modeling, and El Niño / Tropical Cyclone climate simulation built with Three.js, Custom GLSL Shaders & WebGL2.**
+> **Real-time East African meteorological telemetry, 24-hour hourly Open-Meteo forecasts (`Now` → `+24h`), multi-country 3D topographic & satellite relief (`🇹🇿 Tanzania` & `🇰🇪 Kenya`), hydrological river-basin modeling, and El Niño / Tropical Cyclone climate simulation built with Three.js, Custom GLSL Shaders & WebGL2.**
 
 ---
 
 ## 🌍 What This Project Is
 
-**Mdl TWS (Tanzania 3D Interactive Weather System)** is an interactive 3D meteorological and hydrological field instrument built to model, monitor, and visualize **Tanzania’s complex climate dynamics**—from live hourly station observations across 27 cities to extreme seasonal anomalies driven by **El Niño**, the **Positive Indian Ocean Dipole (IOD)**, and **Southwest Indian Ocean Tropical Cyclones** (such as Cyclone Hidaya and Cyclone Kenneth).
+**Mdl TWS (3D Interactive Weather & Basin System)** is an interactive 3D meteorological and hydrological field instrument built to model, monitor, and visualize **East Africa’s complex climate dynamics** across **🇹🇿 Tanzania (`TMA`)** and **🇰🇪 Kenya (`KMD`)**—from live station observations and real-data **24-hour hourly forecasts** across 27 stations per country to extreme seasonal anomalies driven by **El Niño**, the **Positive Indian Ocean Dipole (IOD)**, and **Southwest Indian Ocean Tropical Cyclones**.
 
-Rather than presenting flat 2D weather maps, **Mdl TWS** renders a living, physically lit 3D digital twin of Tanzania—complete with satellite-blended terrain relief, Gerstner-wave Indian Ocean shaders, 9 interactive river catchment basins, 24-hour diurnal solar/night cycles, and procedural 3D regional landmark dioramas—so researchers, hydrologists, planners, and citizens can see *where* moisture converges, *which* river basins swell, and *how* topography shapes East African weather.
+Each country operates with **strict land and weather isolation**: switching between **Tanzania** and **Kenya** swaps the entire 3D country landmass, inland Great Lakes and Rift Valley lakes, mountain peaks, satellite imagery, 9 major river basins, 9 procedural 3D regional landmark dioramas, and an independent 27-station Open-Meteo live + 24-hour forecast cache.
 
 ---
 
@@ -50,20 +50,27 @@ Rather than presenting flat 2D weather maps, **Mdl TWS** renders a living, physi
 
 ## ✨ Key Capabilities & Features
 
-### 1. 📡 Live Open-Meteo Telemetry (27 Tanzanian Stations)
-- Fetches real-time meteorological observations and 24-hour diurnal profiles across **27 stations** spanning Tanzania’s coastal plains, central plateau, Great Lakes, and highland massifs.
+### 1. 📡 Live Open-Meteo Telemetry & Real 24-Hour Hourly Forecast (`Now` → `+24h`)
+- Fetches real-time meteorological observations **and** the next **24 hours of hourly forecast telemetry (`Now` to `+24h`)** in a single Open-Meteo request across **27 stations per country** (**54 stations total** across Tanzania and Kenya), stored in isolated per-country caches.
+- Includes an interactive **24-Hour Forecast Scrubber (`Now → +24h`)**, **`Play 24h`** animation button, **`● Now`** quick-reset button, and `±3h` step controls to watch forecasted rainstorms, cloud cover, wind vectors, and temperatures evolve hour-by-hour in local `EAT`.
 - Performs continuous **Inverse-Distance Weighted (IDW)** spatial interpolation across the 3D terrain mesh coupled with environmental lapse-rate elevation adjustments (`-6.5°C / 1,000 m`).
-- Automatically gates 3D rain curtains, storm cloud decks, and lightning flashes to stations experiencing active precipitation (`mm/h`) and high cloud cover.
+- Automatically gates 3D rain curtains, storm cloud decks, and lightning flashes to stations experiencing active or forecasted precipitation (`mm/h`) and high cloud cover.
 
-### 2. 🌊 Multi-Scenario Climate & Disaster Simulation
-Switch seamlessly between live observations and extreme climate scenarios:
-- **● Live Now**: Real-time station telemetry, wind vectors, cloud cover, and 24-hour station trajectory curves.
-- **🌊 El Niño + IOD**: Simulates the October–March (`Vuli` to `Masika`) teleconnection where warm Niño 3.4 Pacific waters and a positive Western Indian Ocean Dipole pump intense moisture into East Africa—triggering coastal and Rufiji/Kilombero basin floods alongside `+1.5°C` to `+4.2°C` thermal anomalies.
-- **🌀 Cyclone Landfall**: Models a Category 2–3 Southwest Indian Ocean tropical cyclone tracking across the Mafia Channel toward Dar es Salaam, Kibiti, Kilwa, and Mtwara with a rotating 3D eyewall vortex, `145+ km/h` wind streamlines, and coastal storm surge.
+### 2. 🌍 Multi-Country Switcher (`🇹🇿 Tanzania` ↔ `🇰🇪 Kenya`)
+Switch countries directly from the top-left HUD header (`[ 🇹🇿 Tanzania | 🇰🇪 Kenya ]`) or via URL (`?country=tz` / `?country=ke`) with complete geographic and meteorological isolation:
+- **🇹🇿 Tanzania (`TMA`)**: Mainland Tanzania + Zanzibar, Pemba & Mafia islands; Lakes Victoria, Tanganyika, Nyasa, Rukwa, Manyara, Eyasi & Natron; 20 topographic peaks led by **Mt. Kilimanjaro (`5,895 m`)**; 9 regional cities; 9 river basins; 27 live stations.
+- **🇰🇪 Kenya (`KMD`)**: Mainland Kenya + Mombasa, Lamu & Pate islands; Lakes Turkana (Jade Sea), Victoria (Winam Gulf), Naivasha, Nakuru & Baringo; 16 topographic peaks led by **Mt. Kenya (`5,199 m`)** & **Mt. Elgon (`4,321 m`)**; 9 regional cities; 9 river basins; 27 live stations.
 
-### 3. 🏛️ 3D Regional Dioramas & Landmarks (Area-Click Intelligence)
-Clicking any of the **9 primary regional stations** flies the camera into a close-up **3D Regional Diorama** with distance-based Level of Detail (LOD), a **3D Ground Anemometer Wind Compass Ring**, and three curated camera vantage angles (`City Skyline`, `3D Landmark`, `Basin Overview`):
+### 3. 🌊 Multi-Scenario Climate & Disaster Simulation
+Switch seamlessly between live observations + 24h forecast and extreme climate scenarios:
+- **● Live Now (+24h Forecast)**: Real-time station telemetry, interactive `Now → +24h` hourly forecast scrubber, wind vectors, cloud cover, and real 24-hour station forecast charts.
+- **🌊 El Niño + IOD**: Simulates the October–March (`Vuli` / Short Rains to `Masika` / Long Rains) teleconnection where warm Niño 3.4 Pacific waters and a positive Western Indian Ocean Dipole pump intense moisture into East Africa—triggering coastal, Rufiji, and Tana basin floods alongside `+1.5°C` to `+4.2°C` thermal anomalies.
+- **🌀 Cyclone Landfall**: Models a Category 2–3 Southwest Indian Ocean tropical cyclone tracking toward the active country's coast with a rotating 3D eyewall vortex, `145+ km/h` wind streamlines, and coastal storm surge.
 
+### 4. 🏛️ 3D Regional Dioramas & Landmarks (Area-Click Intelligence)
+Clicking any of the **9 primary regional stations** in either country flies the camera into a close-up **3D Regional Diorama** with distance-based Level of Detail (LOD), a **3D Ground Anemometer Wind Compass Ring**, and three curated camera vantage angles (`City Skyline`, `3D Landmark`, `Basin Overview`):
+
+#### 🇹🇿 Tanzania (9 Regional 3D Dioramas)
 | Station | Coordinates & Elev | Procedural 3D Landmark Diorama | Primary Hydrological Basin |
 | :--- | :--- | :--- | :--- |
 | **Moshi** | `3.35°S, 37.34°E` · `890m` | **Kibo Volcanic Crater Rim & Uhuru Peak (`5,895m`)** + Foothill Coffee Terraces | Pangani Headwaters |
@@ -76,17 +83,23 @@ Clicking any of the **9 primary regional stations** flies the camera into a clos
 | **Mbeya** | `8.90°S, 33.46°E` · `1,700m` | **Loleza Rift Escarpment, Ngozi Volcanic Crater Lake & Highland Tea Terraces** | Great Ruaha & Songwe Headwaters |
 | **Mtwara** | `10.27°S, 40.18°E` · `35m` | **Mtwara Natural Deep-Water Jetty, Tanker Berth & LNG Storage Tanks** | Ruvuma Estuary & Southern Coast |
 
-### 4. 🏞️ Interactive Hydrological River Basins (9 Major Catchments)
+#### 🇰🇪 Kenya (9 Regional 3D Dioramas)
+| Station | Coordinates & Elev | Procedural 3D Landmark Diorama | Primary Hydrological Basin |
+| :--- | :--- | :--- | :--- |
+| **Nairobi** | `1.29°S, 36.82°E` · `1,795m` | **KICC Cylindrical Tower & Helipad Crown, Plenary Cone, Britam Prism Tower & Expressway Viaduct** | Upper Athi-Galana-Sabaki Basin |
+| **Mombasa** | `4.04°S, 39.67°E` · `18m` | **Moi Avenue Giant Elephant Tusks, Fort Jesus Coral Bastion & Kilindini Container Port Gantry Cranes** | Tudor & Kilindini Creek Estuary |
+| **Kisumu** | `0.09°S, 34.76°E` · `1,135m` | **Winam Gulf Lake Victoria Pier, Ferry Vessel & Kit Mikayi Balanced Granite Tor Rocks** | Lake Victoria / Nzoia-Nyando Basin |
+| **Nakuru** | `0.30°S, 36.08°E` · `1,850m` | **Menengai Volcanic Caldera Ring & Olkaria Geothermal Steam Cooling Towers** | Central Rift Endorheic Basin |
+| **Eldoret** | `0.52°N, 35.27°E` · `2,090m` | **Uasin Gishu Rift Escarpment & National Cereals Grain Silo Complex** | Upper Nzoia & Kerio Headwaters |
+| **Nyeri** | `0.42°S, 36.95°E` · `1,760m` | **Mt. Kenya Twin Volcanic Plugs (`Batian 5,199m` & `Nelion`) & Highland Tea Terraces** | Upper Tana & Sagana Headwaters |
+| **Garissa** | `0.45°S, 39.64°E` · `145m` | **Tana River Suspension Bridge & Garissa 50 MW Solar Photovoltaic Array** | Middle & Lower Tana Floodplain |
+| **Lodwar** | `3.12°N, 35.60°E` · `477m` | **Lake Turkana Wind Power Farm (Rotating 3-Blade Turbines) & Central Island Crater** | Turkwel & Lake Turkana Jade Sea |
+| **Malindi** | `3.22°S, 40.12°E` · `15m` | **Vasco da Gama Coral Pillar on Promontory & Swahili Dhows** | Sabaki (Galana) Estuary & Bay |
+
+### 5. 🏞️ Interactive Hydrological River Basins (9 Major Catchments per Country)
 Click any river ribbon directly on the 3D terrain—or browse the **Basins (9)** tab in the right dock—to inspect catchment area (`km²`), mainstem length (`km`), key hydroelectric infrastructure, estuary outlets, and live flood-swelling status:
-1. **Rufiji & Kilombero Basin** (`177,429 km²` · Julius Nyerere Hydropower Project / JNHPP `2,115 MW`)
-2. **Great Ruaha River** (`83,970 km²` · Mtera & Kidatu Dams)
-3. **Pangani River Basin** (`43,650 km²` · Nyumba ya Mungu & New Pangani Falls)
-4. **Wami River** (`43,946 km²` · Saadani Estuary)
-5. **Ruvu River** (`17,700 km²` · Kidunda & Lower Ruvu Dar Water Supply)
-6. **Ruvuma River** (`155,500 km²` · Southern Border & Rovuma Delta)
-7. **Malagarasi River** (`130,000 km²` · Igamba Falls & Lake Tanganyika Confluence)
-8. **Kagera River** (`60,000 km²` · Rusumo Falls Hydroelectric Project `80 MW`)
-9. **Mara River** (`13,504 km²` · Serengeti Migration Lifeline)
+- **🇹🇿 Tanzania Catchments**: Rufiji & Kilombero (`JNHPP 2,115 MW`), Great Ruaha (`Mtera & Kidatu`), Pangani (`Nyumba ya Mungu`), Wami, Ruvu (`Dar Water Lifeline`), Ruvuma, Malagarasi, Kagera (`Rusumo Falls`), and Mara.
+- **🇰🇪 Kenya Catchments**: Tana River (`Seven Forks Cascade: Masinga, Kamburu, Gitaru, Kindaruma & Kiambere`), Athi-Galana-Sabaki (`Thika / Ndakaini`), Ewaso Ng'iro North, Nzoia, Yala, Sondu-Miriu (`Sondu & Sang'oro`), Mara (`Maasai Mara`), Turkwel & Kerio (`Turkwel Gorge Dam 106 MW`), and Daua.
 
 ### 5. 🧭 "Field Instrument" Synoptic UI & Point-Probe Cards
 - **Region Dossier Modal**: Displays tabular precipitation/moisture rates, air temperature & heat index, an interactive **2D Compass Wind Rose Anemometer**, a **Basin Saturation Index Gauge**, and a **24-Hour / 6-Month Trajectory Chart**.
@@ -106,9 +119,10 @@ mdl-tws/
     ├── main.js              # WebGL renderer, camera inertia controller, raycasting & main loop
     ├── style.css            # "Tanzanian Synoptic Atlas" Field Instrument design system
     ├── data/
+    │   ├── countries/       # Multi-country registry (index.js, tanzania.js, kenya.js)
     │   ├── geo.js           # High-resolution Tanzania coastline, border & Great Lakes polygons
     │   ├── climate.js       # El Niño/IOD & Cyclone physical models, lapse rates & coordinates
-    │   └── liveWeather.js   # Open-Meteo 27-station live API fetcher & IDW spatial interpolator
+    │   └── liveWeather.js   # Open-Meteo 27-station live + 24h hourly forecast engine & IDW interpolator
     ├── world/
     │   ├── terrain.js       # 23k-vertex relief mesh, Sobel normal map & lake/snow/contour shaders
     │   ├── satellite.js     # Procedural biome relief + Esri/EOX satellite imagery tile compositor
@@ -174,7 +188,10 @@ npm run preview
 | **`Esc`** | Close active Region, River, or Probe modal |
 
 ### URL Query Deep-Linking
-Share direct links to specific scenarios, cities, 3D landmark camera angles, or river basins:
+Share direct links to specific countries, forecast hours, scenarios, cities, 3D landmark camera angles, or river basins:
+- **Switch directly to Kenya (`KMD`)**: `?country=ke`
+- **Inspect Nairobi KICC 3D Landmark in Kenya**: `?country=ke&focus=0&vantage=landmark`
+- **Inspect +12h Open-Meteo Forecast in Tanzania**: `?country=tz&hour=12`
 - **Focus Dar es Salaam Skyline**: `?focus=2&vantage=skyline`
 - **Inspect Dodoma Parliament 3D Landmark**: `?focus=4&vantage=landmark`
 - **Simulate El Niño Floods on Rufiji River Basin**: `?sc=elnino&river=0`
@@ -183,9 +200,9 @@ Share direct links to specific scenarios, cities, 3D landmark camera angles, or 
 ---
 
 ## 📜 Data Sources, Attribution & License
-- **Live Meteorological Telemetry**: Powered by the [Open-Meteo API](https://open-meteo.com/) across 27 Tanzanian station coordinates.
+- **Live Meteorological & 24h Forecast Telemetry**: Powered by the [Open-Meteo API](https://open-meteo.com/) across 27 Tanzanian and 27 Kenyan station coordinates.
 - **Satellite Imagery Layer**: Blended with Esri World Imagery / EOX Sentinel-2 cloudless tiles.
-- **Advisory Notice**: Follow official **Tanzania Meteorological Authority (TMA)** bulletins for operational severe weather warnings.
+- **Advisory Notice**: Follow official **Tanzania Meteorological Authority (TMA)** and **Kenya Meteorological Department (KMD)** bulletins for operational severe weather warnings.
 
 ---
 

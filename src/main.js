@@ -17,18 +17,33 @@ import {
   getImpacts,
   wp,
   clamp,
+  syncCountryClimateArrays,
 } from './data/climate.js';
-import { fetchLiveTanzaniaWeather } from './data/liveWeather.js';
-import { buildTerrain, relief } from './world/terrain.js';
+import { getCountry, getActiveCountryId, setActiveCountry, COUNTRIES } from './data/countries/index.js';
+import { fetchLiveCountryWeather } from './data/liveWeather.js';
+import { buildTerrain, relief, syncCountryTerrainData } from './world/terrain.js';
 import { buildEnvironment } from './world/environment.js';
-import { buildRivers } from './world/rivers.js';
+import { buildRivers, syncCountryRiverPaths } from './world/rivers.js';
 import { buildWorldDetails } from './world/details.js';
-import { buildLandmarks, REGION_LANDMARK_META } from './world/landmarks.js';
+import { buildLandmarks, REGION_LANDMARK_META, syncCountryLandmarkMeta } from './world/landmarks.js';
 import { buildMarkers } from './world/markers.js';
 import { buildWeatherSystems } from './world/weather.js';
 import { createPostPipeline } from './render/post.js';
 import { createDayNightSystem } from './world/sky.js';
 import { initHUD, $, fmtPct, fmtDeg, fmtTempAnom } from './ui/hud.js';
+
+// Check URL query param ?country=ke|tz before initial world build
+{
+  const initParams = new URLSearchParams(window.location.search);
+  const qCountry = initParams.get('country');
+  if (qCountry && COUNTRIES[qCountry]) {
+    setActiveCountry(qCountry);
+    syncCountryClimateArrays();
+    syncCountryTerrainData();
+    syncCountryRiverPaths();
+    syncCountryLandmarkMeta();
+  }
+}
 
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({
@@ -85,16 +100,19 @@ const waterUniforms = {
 };
 
 // Build 3D World Modules
-const { rings, regLines, sweep } = buildEnvironment(scene, waterUniforms);
-const { terr, wf, shelfMesh, coastGlow, updateSurface, lift } = buildTerrain(
+const { rings, regLines, sweep, updateCoastMask } = buildEnvironment(scene, waterUniforms);
+let terrainObj = buildTerrain(scene, waterUniforms, renderer);
+let { terr, wf, shelfMesh, coastGlow, updateSurface, lift } = terrainObj;
+const { riversGroup, hitMeshes, setHoverRiver, updateRivers, rebuildRivers } = buildRivers(
   scene,
-  waterUniforms,
-  renderer
+  waterUniforms
 );
-const { riversGroup, hitMeshes, setHoverRiver, updateRivers } = buildRivers(scene, waterUniforms);
-const { detailsGroup, updateDetails } = buildWorldDetails(scene, waterUniforms);
-const { landmarksGroup, updateLandmarks } = buildLandmarks(scene);
-const { sites, probeGroup, townPoints, updateMarkers } = buildMarkers(scene, $('labels'));
+const { detailsGroup, updateDetails, rebuildDetails } = buildWorldDetails(scene, waterUniforms);
+const { landmarksGroup, updateLandmarks, rebuildLandmarks } = buildLandmarks(scene);
+const { sites, probeGroup, townPoints, updateMarkers, rebuildMarkers } = buildMarkers(
+  scene,
+  $('labels')
+);
 const { rainMesh, streamMesh, heatPts, updateStreams, updateWeather } = buildWeatherSystems(
   scene,
   sites
@@ -137,6 +155,7 @@ function updateSiteMetrics() {
     if (isLive) {
       const lw = getStationLiveWeather(s.i, state.tm);
       s.precipMm = lw.precipMm;
+      s.precipProb = lw.precipProb;
       s.cloudCover = lw.cloudCover;
       s.weatherCode = lw.weatherCode;
       s.weatherDesc = lw.weatherDesc;
@@ -306,9 +325,11 @@ updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenar
 updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
 updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
 
-// Fetch Real-Time Open-Meteo Weather for Tanzania on startup
-function syncLiveWeather(showToast = false) {
-  fetchLiveTanzaniaWeather((ls) => {
+// Fetch Real-Time Open-Meteo Weather for the Active Country (Strictly Isolated per Country)
+function syncLiveWeather(showToast = false, countryId = getActiveCountryId()) {
+  const cProfile = COUNTRIES[countryId] || getCountry();
+  fetchLiveCountryWeather((ls, cid) => {
+    if (cid !== getActiveCountryId()) return; // Ignore if user switched country mid-flight
     hud.updateScenarioHeader();
     if (ls.status === 'live' || ls.status === 'fallback') {
       updateSiteMetrics();
@@ -318,15 +339,99 @@ function syncLiveWeather(showToast = false) {
       updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
       hud.updateHUD(10, true);
       if (showToast && ls.status === 'live') {
-        hud.toast('Synced live Open-Meteo telemetry across 27 Tanzanian stations');
+        hud.toast(
+          `${cProfile.flag} Synced live Open-Meteo telemetry across 27 ${cProfile.name} stations`
+        );
       }
     }
-  });
+  }, countryId);
 }
 syncLiveWeather(false);
 setInterval(() => syncLiveWeather(false), 300000);
 
-$('btn-refresh').onclick = () => syncLiveWeather(true);
+$('btn-refresh').onclick = () => {
+  state.tm = 0;
+  if ($('tm')) $('tm').value = 0;
+  state.playing = false;
+  syncLiveWeather(true);
+};
+
+if ($('btn-now')) {
+  $('btn-now').onclick = () => {
+    state.tm = 0;
+    if ($('tm')) $('tm').value = 0;
+    state.playing = false;
+    updateSiteMetrics();
+    hud.updateButtonsUI();
+    updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario, true);
+    updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+    updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+    hud.updateHUD(10, true);
+    hud.toast('● Viewing Live Now (+0h)');
+  };
+}
+
+// Multi-Country Switcher (🇹🇿 Tanzania ↔ 🇰🇪 Kenya) with Strict Land & Weather Isolation
+function switchCountry(countryId) {
+  if (!COUNTRIES[countryId] || countryId === getActiveCountryId()) return;
+
+  closeRegion();
+  closeRiverBasin();
+  state.probeP = null;
+  probeGroup.visible = false;
+  if ($('probe-card')) $('probe-card').hidden = true;
+
+  // 1. Switch active country profile & synchronize climate/topography/hydrology arrays
+  const country = setActiveCountry(countryId);
+  syncCountryClimateArrays();
+  syncCountryTerrainData();
+
+  // 2. Dispose previous country 3D terrain & build new country's 3D terrain + satellite texture
+  if (terrainObj && terrainObj.dispose) {
+    terrainObj.dispose();
+  }
+  terrainObj = buildTerrain(scene, waterUniforms, renderer);
+  terr = terrainObj.terr;
+  wf = terrainObj.wf;
+  shelfMesh = terrainObj.shelfMesh;
+  coastGlow = terrainObj.coastGlow;
+  updateSurface = terrainObj.updateSurface;
+  lift = terrainObj.lift;
+
+  // 3. Re-bake Indian Ocean coastline cutout mask for new country's landmass
+  updateCoastMask();
+
+  // 4. Rebuild 3D rivers, instanced cities/forests/corridors, 3D regional landmarks, and station markers
+  rebuildRivers();
+  rebuildDetails();
+  rebuildLandmarks();
+  rebuildMarkers();
+
+  // 5. Update isolated weather metrics & refresh HUD
+  updateSiteMetrics();
+  hud.rebuildCountryHUD();
+  updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario, true);
+  updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+  updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+  hud.updateHUD(10, true);
+
+  // 6. Reset camera smoothly to overview of the newly selected country
+  focusIdx = country.defaultFocusIdx || 0;
+  state.mode = 'over';
+  phaseT = 9;
+  camTg.tx = 0;
+  camTg.tz = 0;
+  camTg.d = overviewDist();
+  camTg.ph = 0.92;
+
+  // 7. Fetch or display isolated live Open-Meteo weather for the selected country
+  syncLiveWeather(true, countryId);
+  hud.toast(`${country.flag} Switched to ${country.name} (${country.agencyName})`);
+}
+
+document.querySelectorAll('.country-btn').forEach((btn) => {
+  btn.onclick = () => switchCountry(btn.dataset.country);
+});
 
 function switchToFreeCam() {
   if (state.mode !== 'free' || state.auto) {
@@ -722,14 +827,20 @@ $('spd').onclick = () => {
 };
 
 const stepMonth = (d) => {
-  state.tm = (Math.floor(state.tm) + d + 6) % 6;
+  if (state.scenario === 'live') {
+    const curHour = Math.round((state.tm / 6) * 24);
+    const nextHour = (curHour + d * 3 + 27) % 27;
+    state.tm = Math.min(6, (nextHour / 24) * 6);
+  } else {
+    state.tm = (Math.floor(state.tm) + d + 6) % 6;
+  }
   sl.value = state.tm;
   state.playing = false;
   hud.updateButtonsUI();
   updateSiteMetrics();
-  updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario);
-  updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
-  updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario);
+  updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario, true);
+  updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+  updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
   hud.updateHUD(10, true);
 };
 $('pv').onclick = () => stepMonth(-1);
@@ -805,13 +916,14 @@ function copyText(t) {
 }
 
 const makeStamp = () => {
+  const country = getCountry();
   const sc = SCENARIOS[state.scenario];
   const mi = Math.floor(state.tm);
   const timeStr =
     state.scenario === 'live'
       ? `Live (+${Math.round((state.tm / 6) * 24)}h)`
       : `${MONTHS[mi]} ${mi < 3 ? 2026 : 2027}`;
-  return `Mdl TWS (Tanzania 3D Synoptic Atlas) — ${sc.title} [${timeStr}]`;
+  return `Mdl TWS (${country.name} 3D Synoptic Atlas) — ${sc.title} [${timeStr}]`;
 };
 
 $('mcp').onclick = () => {
@@ -866,12 +978,12 @@ $('cpall').onclick = () =>
 
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
-  if (e.key === ' ' && state.scenario !== 'live') {
+  if (e.key === ' ') {
     e.preventDefault();
     state.playing = !state.playing;
     hud.updateButtonsUI();
-  } else if (e.key === 'ArrowRight' && state.scenario !== 'live') stepMonth(1);
-  else if (e.key === 'ArrowLeft' && state.scenario !== 'live') stepMonth(-1);
+  } else if (e.key === 'ArrowRight') stepMonth(1);
+  else if (e.key === 'ArrowLeft') stepMonth(-1);
   else if (e.key === 'Escape') {
     closeRegion();
     closeRiverBasin();
@@ -935,6 +1047,17 @@ hud.updateButtonsUI();
   if (qSc && SCENARIOS[qSc]) {
     const btn = document.querySelector(`.scen-btn[data-sc="${qSc}"]`);
     if (btn) btn.click();
+  }
+  const qHour = params.get('hour');
+  if (qHour !== null && !Number.isNaN(+qHour)) {
+    state.tm = clamp((+qHour / 24) * 6, 0, 6);
+    sl.value = state.tm;
+    updateSiteMetrics();
+    hud.updateButtonsUI();
+    updateSurface(state.tm, state.nino, state.relScale, state.dataMode, state.scenario, true);
+    updateRivers(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+    updateDetails(state.tm, state.nino, state.relScale, lift, state.dataMode, state.scenario, true);
+    hud.updateHUD(10, true);
   }
   const qFocus = params.get('focus');
   const qVantage = params.get('vantage') || 'skyline';

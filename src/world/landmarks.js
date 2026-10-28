@@ -1,120 +1,18 @@
 // Regional 3D Diorama Landmarks, Harbor Infrastructure & Focused Area Anemometer Ring
-// Builds recognizable procedural 3D architectural & geographical models for each of the 9 Tanzanian regions
-// with distance-based LOD and interactive vantage points when clicking an area.
+// Builds recognizable procedural 3D architectural & geographical models for each of the 9 regions
+// (Tanzania & Kenya) with distance-based LOD and interactive vantage points when clicking an area.
 import * as THREE from 'three';
 import { REGIONS, wp, clamp, rainAnomaly } from '../data/climate.js';
+import { getCountry } from '../data/countries/index.js';
 import { relief } from './terrain.js';
 
-export const REGION_LANDMARK_META = [
-  {
-    idx: 0,
-    city: 'Moshi',
-    landmarkName: 'Kibo Crater & Uhuru Peak (5,895m)',
-    archName: 'Foothills Coffee Estates & Moshi Town',
-    basinLabel: 'Pangani Headwaters',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.06, thOff: 0.2 },
-      landmark: { dx: 0.4, dz: -2.2, d: 13.5, ph: 0.96, thOff: -0.35 },
-      basin: { dx: -0.8, dz: 2.5, d: 24.0, ph: 0.88, thOff: 0.5 },
-    },
-  },
-  {
-    idx: 1,
-    city: 'Tanga',
-    landmarkName: 'Tanga Deep-Water Jetty & Dhows',
-    archName: 'Harbor Front & Sisal Estates',
-    basinLabel: 'Pangani Estuary & Bay',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.0, ph: 1.05, thOff: 0.3 },
-      landmark: { dx: 0.9, dz: 0.3, d: 11.8, ph: 1.12, thOff: 0.75 },
-      basin: { dx: -1.2, dz: 1.8, d: 23.0, ph: 0.9, thOff: 0.1 },
-    },
-  },
-  {
-    idx: 2,
-    city: 'Dar es Salaam',
-    landmarkName: 'Tanzanite Bridge & Port Cranes',
-    archName: 'Kivukoni CBD Towers & Harbor',
-    basinLabel: 'Msimbazi & Coastal Basin',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.05, thOff: 0.35 },
-      landmark: { dx: 0.85, dz: -0.35, d: 11.5, ph: 1.14, thOff: 0.85 },
-      basin: { dx: -1.4, dz: 0.8, d: 24.0, ph: 0.88, thOff: -0.2 },
-    },
-  },
-  {
-    idx: 3,
-    city: 'Morogoro',
-    landmarkName: 'Uluguru Met Tower & SGR Viaduct',
-    archName: 'Morogoro Municipality & Mindu Dam',
-    basinLabel: 'Ngerengere / Ruvu Catchment',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.04, thOff: 0.15 },
-      landmark: { dx: 0.5, dz: 0.6, d: 12.2, ph: 1.08, thOff: -0.4 },
-      basin: { dx: 1.2, dz: -1.0, d: 23.5, ph: 0.88, thOff: 0.3 },
-    },
-  },
-  {
-    idx: 4,
-    city: 'Dodoma',
-    landmarkName: 'Bunge Parliament Rotunda Dome',
-    archName: 'Government City & Nyerere Square',
-    basinLabel: 'Central Plateau Semiarid Basin',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.0, ph: 1.06, thOff: 0.25 },
-      landmark: { dx: 0.25, dz: 0.15, d: 11.2, ph: 1.14, thOff: -0.3 },
-      basin: { dx: 0.8, dz: 1.4, d: 24.0, ph: 0.86, thOff: 0.6 },
-    },
-  },
-  {
-    idx: 5,
-    city: 'Mwanza',
-    landmarkName: 'Bismarck Rock & Victoria Ferries',
-    archName: 'Rock City Granite Hills & Port',
-    basinLabel: 'Lake Victoria Southern Gulf',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.04, thOff: -0.25 },
-      landmark: { dx: -0.6, dz: -0.5, d: 11.5, ph: 1.12, thOff: -0.75 },
-      basin: { dx: -1.5, dz: -1.2, d: 24.0, ph: 0.88, thOff: -0.4 },
-    },
-  },
-  {
-    idx: 6,
-    city: 'Kigoma',
-    landmarkName: 'MV Liemba Berth & Railway Terminus',
-    archName: 'Kigoma Bay Deep-Water Port',
-    basinLabel: 'Lake Tanganyika & Malagarasi',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.04, thOff: -0.45 },
-      landmark: { dx: -0.7, dz: 0.2, d: 11.8, ph: 1.12, thOff: -0.9 },
-      basin: { dx: 1.2, dz: 1.5, d: 24.0, ph: 0.88, thOff: -0.2 },
-    },
-  },
-  {
-    idx: 7,
-    city: 'Mbeya',
-    landmarkName: 'Loleza Escarpment & Ngozi Rim',
-    archName: 'Southern Highlands Tea Terraces',
-    basinLabel: 'Great Ruaha & Songwe Headwaters',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.5, ph: 1.02, thOff: 0.2 },
-      landmark: { dx: 0.5, dz: 0.7, d: 12.5, ph: 1.08, thOff: -0.35 },
-      basin: { dx: 1.8, dz: -1.2, d: 24.5, ph: 0.86, thOff: 0.45 },
-    },
-  },
-  {
-    idx: 8,
-    city: 'Mtwara',
-    landmarkName: 'Mtwara LNG Terminal & Deep Harbor',
-    archName: 'Shangani Peninsula & Port Jetty',
-    basinLabel: 'Ruvuma Estuary & Southern Coast',
-    vantages: {
-      skyline: { dx: 0, dz: 0, d: 15.0, ph: 1.06, thOff: 0.4 },
-      landmark: { dx: 0.7, dz: 0.25, d: 11.5, ph: 1.12, thOff: 0.85 },
-      basin: { dx: -1.0, dz: 1.6, d: 23.5, ph: 0.88, thOff: 0.15 },
-    },
-  },
-];
+export const REGION_LANDMARK_META = [];
+export function syncCountryLandmarkMeta() {
+  const nextMeta = getCountry().landmarkMeta || [];
+  REGION_LANDMARK_META.length = 0;
+  nextMeta.forEach((m) => REGION_LANDMARK_META.push(m));
+}
+syncCountryLandmarkMeta();
 
 export function buildLandmarks(scene) {
   const landmarksGroup = new THREE.Group();
@@ -211,15 +109,238 @@ export function buildLandmarks(scene) {
     return g;
   }
 
-  REGIONS.forEach((reg, idx) => {
-    const [name, lon, lat] = reg;
-    const [cx, cz] = wp(lon, lat);
-    const baseH = relief(cx, cz);
+  function rebuildLandmarks() {
+    syncCountryLandmarkMeta();
+    const country = getCountry();
+    while (landmarksGroup.children.length > 0) {
+      landmarksGroup.remove(landmarksGroup.children[0]);
+    }
+    regionGroups.length = 0;
+    animatedParts.length = 0;
 
-    const group = new THREE.Group();
-    group.userData = { idx, name, cx, cz, baseH };
+    REGIONS.forEach((reg, idx) => {
+      const [name, lon, lat] = reg;
+      const [cx, cz] = wp(lon, lat);
+      const baseH = relief(cx, cz);
 
-    if (idx === 0) {
+      const group = new THREE.Group();
+      group.userData = { idx, name, cx, cz, baseH };
+
+      if (country.id === 'ke') {
+        if (idx === 0) {
+          // 0. NAIROBI: Iconic KICC Cylindrical Tower + Conical Helipad Crown + Plenary Amphitheatre + Britam/GTC Towers + Expressway Viaduct
+          const kiccShaft = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.18, 0.2, 1.55, 20),
+            ochreRoofMat
+          );
+          kiccShaft.position.set(0.05, 0.78, 0.05);
+          const helipadSaucer = new THREE.Mesh(
+            new THREE.ConeGeometry(0.32, 0.16, 20),
+            concreteMat
+          );
+          helipadSaucer.position.set(0.05, 1.62, 0.05);
+          const helipadRim = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.34, 0.3, 0.05, 20),
+            craneRedMat
+          );
+          helipadRim.position.set(0.05, 1.71, 0.05);
+          const kiccBeacon = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), beaconMat);
+          kiccBeacon.position.set(0.05, 1.82, 0.05);
+          animatedParts.push({ mesh: kiccBeacon, type: 'pulse', phase: 0.2 });
+
+          // KICC Plenary Hut Amphitheatre
+          const plenary = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.26, 12), concreteMat);
+          plenary.position.set(0.42, 0.15, 0.18);
+
+          // Britam Prism Tower (Upper Hill)
+          const britam = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.17, 1.75, 4), glassTowerMat);
+          britam.position.set(-0.38, 0.88, 0.28);
+          const britamSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.04, 0.42, 6), concreteMat);
+          britamSpire.position.set(-0.38, 1.95, 0.28);
+
+          // Nairobi Expressway Elevated Viaduct
+          const expDeck = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.06, 0.14), concreteMat);
+          expDeck.position.set(0, 0.24, -0.38);
+          expDeck.rotation.y = -0.25;
+          group.add(kiccShaft, helipadSaucer, helipadRim, kiccBeacon, plenary, britam, britamSpire, expDeck);
+        } else if (idx === 1) {
+          // 1. MOMBASA: Symbolic Moi Avenue Giant Elephant Tusks, Kilindini Port Gantry Cranes, Fort Jesus & Cargo Ships
+          const tuskL = new THREE.Mesh(
+            new THREE.TorusGeometry(0.28, 0.038, 8, 20, Math.PI * 0.75),
+            concreteMat
+          );
+          tuskL.position.set(-0.18, 0.22, 0.05);
+          tuskL.rotation.z = Math.PI * 0.12;
+          const tuskR = new THREE.Mesh(
+            new THREE.TorusGeometry(0.28, 0.038, 8, 20, Math.PI * 0.75),
+            concreteMat
+          );
+          tuskR.position.set(0.12, 0.22, 0.05);
+          tuskR.rotation.y = Math.PI;
+          tuskR.rotation.z = Math.PI * 0.12;
+          group.add(tuskL, tuskR);
+
+          // Fort Jesus Coral Bastion
+          const fort = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 0.32), ochreRoofMat);
+          fort.position.set(0.35, 0.09, -0.25);
+          group.add(fort);
+
+          // Kilindini Container Terminal Quay & 3 Gantry Cranes
+          const quay = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.09, 1.05), concreteMat);
+          quay.position.set(0.55, 0.04, 0.35);
+          group.add(quay);
+          for (let c = 0; c < 3; c++) {
+            const zPos = 0.05 + c * 0.3;
+            const mast = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.5, 0.07), craneRedMat);
+            mast.position.set(0.65, 0.28, zPos);
+            const jib = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.04, 0.05), craneRedMat);
+            jib.position.set(0.75, 0.5, zPos);
+            group.add(mast, jib);
+          }
+          const ship1 = makeCargoShip(1.05);
+          ship1.position.set(1.18, -0.03, 0.28);
+          const ship2 = makeCargoShip(0.85);
+          ship2.position.set(1.48, -0.03, -0.25);
+          group.add(ship1, ship2);
+          animatedParts.push({ mesh: ship1, type: 'bob', baseY: -0.03, phase: 0.3 });
+          animatedParts.push({ mesh: ship2, type: 'bob', baseY: -0.03, phase: 1.6 });
+        } else if (idx === 2) {
+          // 2. KISUMU: Winam Gulf Lake Victoria Pier, Ferry & Kit Mikayi Balanced Tor Rocks
+          const pier = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.16), concreteMat);
+          pier.position.set(-0.55, 0.04, 0.15);
+          const ferry = makeCargoShip(0.85);
+          ferry.position.set(-1.02, -0.02, 0.2);
+          group.add(pier, ferry);
+          animatedParts.push({ mesh: ferry, type: 'bob', baseY: -0.02, phase: 0.8 });
+
+          const rocks = [
+            [0.35, 0.14, -0.35, 0.26],
+            [0.35, 0.42, -0.35, 0.22],
+            [0.55, 0.16, -0.28, 0.2],
+          ];
+          rocks.forEach(([rx, ry, rz, rs], ri) => {
+            const b = new THREE.Mesh(new THREE.DodecahedronGeometry(rs, 1), graniteMat);
+            b.position.set(rx, ry, rz);
+            b.rotation.set(ri * 0.4, ri * 0.9, 0);
+            group.add(b);
+          });
+        } else if (idx === 3) {
+          // 3. NAKURU: Menengai Volcanic Caldera Ring & Olkaria Geothermal Cooling Towers
+          const caldera = new THREE.Mesh(
+            new THREE.TorusGeometry(0.56, 0.12, 10, 24).rotateX(Math.PI / 2),
+            copperDomeMat
+          );
+          caldera.position.set(0.15, 0.22, -0.45);
+          group.add(caldera);
+
+          for (let g = 0; g < 2; g++) {
+            const hyperboloid = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.12, 0.18, 0.36, 14),
+              concreteMat
+            );
+            hyperboloid.position.set(-0.35 + g * 0.34, 0.18, 0.38);
+            group.add(hyperboloid);
+          }
+        } else if (idx === 4) {
+          // 4. ELDORET: Uasin Gishu Rift Escarpment & Twin Grain Silo Complex
+          for (let s = 0; s < 4; s++) {
+            const silo = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.48, 12), concreteMat);
+            silo.position.set(-0.24 + s * 0.18, 0.24, 0.15);
+            const cap = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.1, 12), ochreRoofMat);
+            cap.position.set(-0.24 + s * 0.18, 0.53, 0.15);
+            group.add(silo, cap);
+          }
+        } else if (idx === 5) {
+          // 5. NYERI & MT. KENYA: Twin Jagged Volcanic Plugs (Batian 5,199m & Nelion) + Highland Tea Terraces
+          const [mkx, mkz] = wp(37.31, -0.15);
+          const mGroup = new THREE.Group();
+          mGroup.position.set(mkx - cx, 1.15, mkz - cz);
+          const batian = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.95, 6), snowIceMat);
+          batian.position.set(-0.15, 0.45, 0);
+          const nelion = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.82, 6), snowIceMat);
+          nelion.position.set(0.22, 0.38, 0.12);
+          mGroup.add(batian, nelion);
+          group.add(mGroup);
+
+          for (let t = 0; t < 3; t++) {
+            const step = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.48 + t * 0.22, 0.55 + t * 0.22, 0.08, 12),
+              copperDomeMat
+            );
+            step.position.set(0, 0.2 - t * 0.06, 0.15);
+            group.add(step);
+          }
+        } else if (idx === 6) {
+          // 6. GARISSA: Tana River Suspension Bridge & Garissa 50 MW Solar Farm Array
+          const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.06, 0.16), concreteMat);
+          bridge.position.set(0, 0.16, 0.12);
+          const arch1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.38, 0.18), craneRedMat);
+          arch1.position.set(-0.28, 0.28, 0.12);
+          const arch2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.38, 0.18), craneRedMat);
+          arch2.position.set(0.28, 0.28, 0.12);
+          group.add(bridge, arch1, arch2);
+
+          for (let r = 0; r < 2; r++) {
+            for (let c = 0; c < 3; c++) {
+              const panel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.14), glassTowerMat);
+              panel.position.set(-0.25 + c * 0.26, 0.08, -0.32 - r * 0.2);
+              panel.rotation.x = 0.25;
+              group.add(panel);
+            }
+          }
+        } else if (idx === 7) {
+          // 7. LODWAR & LAKE TURKANA: Lake Turkana Wind Power Farm Turbines & Central Island Crater
+          for (let w = 0; w < 3; w++) {
+            const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.04, 0.68, 8), concreteMat);
+            const tx = 0.25 + w * 0.32;
+            const tz = -0.15 + (w % 2) * 0.28;
+            mast.position.set(tx, 0.34, tz);
+
+            const rotor = new THREE.Group();
+            rotor.position.set(tx, 0.68, tz);
+            for (let b = 0; b < 3; b++) {
+              const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.28, 0.015), concreteMat);
+              blade.position.y = 0.14;
+              const holder = new THREE.Group();
+              holder.rotation.z = (b * Math.PI * 2) / 3;
+              holder.add(blade);
+              rotor.add(holder);
+            }
+            group.add(mast, rotor);
+            animatedParts.push({ mesh: rotor, type: 'rotor', phase: w * 1.1 });
+          }
+
+          const islandCrater = new THREE.Mesh(
+            new THREE.TorusGeometry(0.32, 0.08, 8, 16).rotateX(Math.PI / 2),
+            copperDomeMat
+          );
+          islandCrater.position.set(0.85, 0.06, -0.35);
+          group.add(islandCrater);
+        } else if (idx === 8) {
+          // 8. MALINDI: Vasco da Gama Coral Pillar on Promontory & Swahili Dhows
+          const promontory = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.32, 0.14, 10), graniteMat);
+          promontory.position.set(0.42, 0.07, 0.12);
+          const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 0.48, 10), concreteMat);
+          pillar.position.set(0.42, 0.34, 0.12);
+          const crossCap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), ochreRoofMat);
+          crossCap.position.set(0.42, 0.62, 0.12);
+          group.add(promontory, pillar, crossCap);
+
+          const dhow1 = makeDhow(1.15);
+          dhow1.position.set(0.98, -0.02, 0.32);
+          const dhow2 = makeDhow(0.95);
+          dhow2.position.set(1.22, -0.02, -0.18);
+          group.add(dhow1, dhow2);
+          animatedParts.push({ mesh: dhow1, type: 'bob', baseY: -0.02, phase: 0.5 });
+          animatedParts.push({ mesh: dhow2, type: 'bob', baseY: -0.02, phase: 2.0 });
+        }
+
+        landmarksGroup.add(group);
+        regionGroups.push(group);
+        return;
+      }
+
+      if (idx === 0) {
       // 0. MOSHI & MT. KILIMANJARO: Kibo volcanic caldera crown, glacial ribs & Uhuru beacon + coffee terraces
       const [kx, kz] = wp(37.35, -3.07);
       const kOffX = kx - cx;
@@ -460,6 +581,8 @@ export function buildLandmarks(scene) {
     landmarksGroup.add(group);
     regionGroups.push(group);
   });
+  }
+  rebuildLandmarks();
 
   // ============================================================================
   // FOCUSED AREA INSTRUMENT RING: 3D Wind Compass Vane + Ground Rain Splash Rings
@@ -569,6 +692,8 @@ export function buildLandmarks(scene) {
       } else if (ap.type === 'pulse') {
         const on = Math.sin(T * 4.2 + ap.phase) > 0.15;
         ap.mesh.scale.setScalar(on ? 1.25 : 0.75);
+      } else if (ap.type === 'rotor') {
+        ap.mesh.rotation.z = T * 3.8 + ap.phase;
       }
     });
 
@@ -604,5 +729,6 @@ export function buildLandmarks(scene) {
     landmarksGroup,
     focusRingGroup,
     updateLandmarks,
+    rebuildLandmarks,
   };
 }

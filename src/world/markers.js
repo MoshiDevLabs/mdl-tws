@@ -118,10 +118,11 @@ export function buildMarkers(scene, labelsContainer) {
   });
 
   // 2. Secondary Towns & Urban Centers (Rendered with smooth circular glow sprites, no white squares!)
-  const townCoords = TOWNS.map((a) => ({ name: a[0], xz: wp(a[1], a[2]) }));
-  const tg3 = new Float32Array(townCoords.length * 3);
+  let townCoords = TOWNS.map((a) => ({ name: a[0], xz: wp(a[1], a[2]), baseH: 0 }));
+  let tg3 = new Float32Array(Math.max(30, townCoords.length) * 3);
   const tgeo = new THREE.BufferGeometry();
   tgeo.setAttribute('position', new THREE.BufferAttribute(tg3, 3));
+  tgeo.setDrawRange(0, townCoords.length);
   const townPoints = new THREE.Points(
     tgeo,
     new THREE.PointsMaterial({
@@ -139,14 +140,49 @@ export function buildMarkers(scene, labelsContainer) {
   scene.add(townPoints);
 
   // 3. Geographic Feature Labels (Peaks, Lakes, National Parks, Islands)
-  const geoLabels = GEO_LABELS.map(([n, lo, la, h, kind]) => {
-    const q = wp(lo, la);
-    const e = document.createElement('div');
-    e.className = `tag geo geo-${kind}`;
-    e.textContent = n;
-    labelsContainer.appendChild(e);
-    return { x: q[0], z: q[1], baseH: relief(q[0], q[1]), h, e };
-  });
+  let geoLabels = [];
+  function buildGeoLabels() {
+    geoLabels.forEach((g) => {
+      if (g.e && g.e.parentNode) g.e.parentNode.removeChild(g.e);
+    });
+    geoLabels = GEO_LABELS.map(([n, lo, la, h, kind]) => {
+      const q = wp(lo, la);
+      const e = document.createElement('div');
+      e.className = `tag geo geo-${kind}`;
+      e.textContent = n;
+      labelsContainer.appendChild(e);
+      return { x: q[0], z: q[1], baseH: relief(q[0], q[1]), h, e };
+    });
+  }
+  buildGeoLabels();
+
+  function rebuildMarkers() {
+    REGIONS.forEach((a, i) => {
+      const s = sites[i];
+      if (!s) return;
+      const q = wp(a[1], a[2]);
+      s.n = a[0];
+      s.lon = a[1];
+      s.lat = a[2];
+      s.note = a[3];
+      s.elevM = a[4];
+      s.x = q[0];
+      s.z = q[1];
+      s.baseH = relief(q[0], q[1]);
+      const nameEl = s.el.querySelector('.t-name');
+      if (nameEl) nameEl.textContent = s.n;
+    });
+
+    townCoords = TOWNS.map((a) => ({
+      name: a[0],
+      xz: wp(a[1], a[2]),
+      baseH: 0,
+    }));
+    tgeo.setDrawRange(0, townCoords.length);
+
+    buildGeoLabels();
+    probeGroup.visible = false;
+  }
 
   // 4. Interactive Terrain Probe Marker (Compact 3D pin)
   const probeGroup = new THREE.Group();
@@ -329,5 +365,5 @@ export function buildMarkers(scene, labelsContainer) {
     });
   }
 
-  return { sites, probeGroup, townPoints, updateMarkers };
+  return { sites, probeGroup, townPoints, updateMarkers, rebuildMarkers };
 }

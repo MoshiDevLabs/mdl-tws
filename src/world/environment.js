@@ -16,8 +16,9 @@ export function buildEnvironment(scene, waterUniforms) {
   coastCanvas.width = coastCanvas.height = 512;
   const cCtx = coastCanvas.getContext('2d');
   const sc = 512 / (2 * R);
-  cCtx.fillStyle = '#000';
-  cCtx.fillRect(0, 0, 512, 512);
+  const coastTex = new THREE.CanvasTexture(coastCanvas);
+  coastTex.wrapS = coastTex.wrapT = THREE.ClampToEdgeWrapping;
+  waterUniforms.uCoastTex = { value: coastTex };
 
   const traceCoast = () => {
     cCtx.beginPath();
@@ -31,36 +32,40 @@ export function buildEnvironment(scene, waterUniforms) {
     });
   };
 
-  // Gentle shallow turquoise shelf around the entire perimeter (Red channel)
-  cCtx.save();
-  cCtx.strokeStyle = 'rgba(220, 120, 0, 0.75)';
-  cCtx.shadowColor = '#ff8800';
-  cCtx.shadowBlur = 14;
-  cCtx.lineWidth = 5;
-  traceCoast();
-  cCtx.stroke();
-  cCtx.restore();
+  function updateCoastMask() {
+    cCtx.fillStyle = '#000';
+    cCtx.fillRect(0, 0, 512, 512);
 
-  // Subtle shoreline wave-lap zone around the outer wall perimeter (Blue channel)
-  cCtx.save();
-  cCtx.strokeStyle = 'rgba(0, 180, 255, 0.85)';
-  cCtx.shadowColor = '#00b4ff';
-  cCtx.shadowBlur = 4;
-  cCtx.lineWidth = 4;
-  traceCoast();
-  cCtx.stroke();
-  cCtx.restore();
+    // Gentle shallow turquoise shelf around the entire perimeter (Red channel)
+    cCtx.save();
+    cCtx.strokeStyle = 'rgba(220, 120, 0, 0.75)';
+    cCtx.shadowColor = '#ff8800';
+    cCtx.shadowBlur = 14;
+    cCtx.lineWidth = 5;
+    traceCoast();
+    cCtx.stroke();
+    cCtx.restore();
 
-  // Solid interior land & island mask (Green channel = 1.0) so ocean water never goes inland
-  cCtx.save();
-  cCtx.fillStyle = 'rgb(0, 255, 0)';
-  traceCoast();
-  cCtx.fill();
-  cCtx.restore();
+    // Subtle shoreline wave-lap zone around the outer wall perimeter (Blue channel)
+    cCtx.save();
+    cCtx.strokeStyle = 'rgba(0, 180, 255, 0.85)';
+    cCtx.shadowColor = '#00b4ff';
+    cCtx.shadowBlur = 4;
+    cCtx.lineWidth = 4;
+    traceCoast();
+    cCtx.stroke();
+    cCtx.restore();
 
-  const coastTex = new THREE.CanvasTexture(coastCanvas);
-  coastTex.wrapS = coastTex.wrapT = THREE.ClampToEdgeWrapping;
-  waterUniforms.uCoastTex = { value: coastTex };
+    // Solid interior land & island mask (Green channel = 1.0) so ocean water never goes inland
+    cCtx.save();
+    cCtx.fillStyle = 'rgb(0, 255, 0)';
+    traceCoast();
+    cCtx.fill();
+    cCtx.restore();
+
+    coastTex.needsUpdate = true;
+  }
+  updateCoastMask();
 
   // Real 3D Moving Ocean Shader (4-train Gerstner Swells + Capillary Waves + Caustics + Fresnel)
   const oceanVS = `
@@ -317,5 +322,5 @@ export function buildEnvironment(scene, waterUniforms) {
   const countryBorder = new THREE.Group();
   const regLines = new THREE.Group();
 
-  return { oceanMesh, rings, regLines, countryBorder, sweep };
+  return { oceanMesh, rings, regLines, countryBorder, sweep, updateCoastMask };
 }

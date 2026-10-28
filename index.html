@@ -17,8 +17,16 @@
     <div id="hud">
       <div id="head">
         <div class="brand-row">
-          <span class="inst-tag">TMA · SYNOPTIC ATLAS</span>
+          <span class="inst-tag" id="inst-tag">TMA · SYNOPTIC ATLAS</span>
           <h1>Mdl TWS</h1>
+          <div class="country-bar" role="group" aria-label="Active Country">
+            <button class="country-btn on" data-country="tz" type="button" title="Switch to Tanzania (TMA)">
+              🇹🇿 Tanzania
+            </button>
+            <button class="country-btn" data-country="ke" type="button" title="Switch to Kenya (KMD)">
+              🇰🇪 Kenya
+            </button>
+          </div>
         </div>
         <div class="sub" id="scen-title">Tanzania 3D Interactive Weather &amp; Basin System</div>
 
@@ -107,10 +115,11 @@
 
           <canvas id="pac" class="i" width="460" height="108"></canvas>
 
-          <div id="sim-controls" hidden>
+          <div id="sim-controls">
             <div class="row">
+              <button id="btn-now" class="b on" type="button" title="Jump to current Live Now (+0h)">● Now</button>
               <button id="pv" class="b" aria-label="Previous step">‹</button>
-              <button id="ply" class="b">Pause</button>
+              <button id="ply" class="b">Play 24h</button>
               <button id="nx" class="b" aria-label="Next step">›</button>
               <button id="spd" class="b">1x</button>
             </div>
@@ -119,18 +128,18 @@
               id="tm"
               type="range"
               min="0"
-              max="5.99"
+              max="6"
               step="0.01"
               value="0"
               aria-label="Timeline scrubber"
             />
             <div class="lab">
-              <span>Curve: <em style="color:#28c7b8;font-style:normal">Moisture %</em> vs <em style="color:#e59a3c;font-style:normal">Heat °C</em></span>
-              <span id="tm-range-lbl">Oct → Mar season</span>
+              <span id="sp-curve-lbl">Curve: <em style="color:#28c7b8;font-style:normal">Rain / Cloud</em> vs <em style="color:#e59a3c;font-style:normal">Temp °C</em></span>
+              <span id="tm-range-lbl">Now → +24h Forecast</span>
             </div>
             <canvas id="sp" class="i" width="460" height="72"></canvas>
 
-            <div id="intensity-wrap">
+            <div id="intensity-wrap" hidden>
               <div class="lab">
                 <span id="ns-title">Scenario intensity / El Niño index</span>
                 <span id="nl">+3.3°C (strong)</span>

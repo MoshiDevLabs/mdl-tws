@@ -1,17 +1,42 @@
-// Mdl TWS — Tanzania 3D Interactive Weather System (Climate & Live Real-Time Telemetry Engine)
-// Supports:
-// 1. 'live'    — Real-time Open-Meteo API telemetry + 24h forecast across 27 Tanzanian stations
-// 2. 'elnino'  — Super El Niño + Positive Indian Ocean Dipole (Deluge & Heat Surge)
-// 3. 'cyclone' — Tropical Cyclone Landfall (Cyclone Hidaya / Kenneth coastal vortex)
+// Mdl TWS — Multi-Country Climate & Live Real-Time Telemetry Engine
+// Dynamically adapts projection, anomaly centers, cyclone track, stations & towns to the active country ('tz' or 'ke').
+import {
+  K,
+  R,
+  wp,
+  unwp,
+  COUNTRIES,
+  COUNTRY_LIST,
+  getCountry,
+  getActiveCountryId,
+  setActiveCountry,
+} from './countries/index.js';
+import {
+  sampleLiveWeather,
+  getStationLiveWeather,
+  getStationHourlySeries,
+  getForecastTimeLabel,
+  liveState,
+  getLiveState,
+} from './liveWeather.js';
 
-import { sampleLiveWeather, getStationLiveWeather, liveState } from './liveWeather.js';
+export {
+  K,
+  R,
+  wp,
+  unwp,
+  COUNTRIES,
+  COUNTRY_LIST,
+  getCountry,
+  getActiveCountryId,
+  setActiveCountry,
+  sampleLiveWeather,
+  getStationLiveWeather,
+  getStationHourlySeries,
+  getForecastTimeLabel,
+  getLiveState,
+};
 
-export { sampleLiveWeather, getStationLiveWeather };
-
-export const K = 8.5;
-export const R = 68;
-export const wp = (lo, la) => [(lo - 35) * K, (-la - 6.3) * K];
-export const unwp = (x, z) => [x / K + 35, -(z / K + 6.3)];
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const MONTHS = ['Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
@@ -21,10 +46,10 @@ export const SCENARIOS = {
   live: {
     id: 'live',
     short: '● Live Now',
-    title: 'Tanzania 3D Interactive Weather System',
+    title: '3D Interactive Weather & Basin System',
     badge: 'Real-time station & satellite telemetry',
     hotBadge: 'Current weather right now · Rain (mm/h) · Temp (°C)',
-    note: 'Current real-time weather fetched across 27 Tanzanian stations via Open-Meteo. Shows actual current rainfall right now (0.0 mm/h when dry), live cloud cover, temperature, and wind.',
+    note: 'Current real-time weather fetched across 27 national stations via Open-Meteo. Shows actual current rainfall right now (0.0 mm/h when dry), live cloud cover, temperature, and wind.',
   },
   elnino: {
     id: 'elnino',
@@ -32,15 +57,15 @@ export const SCENARIOS = {
     title: 'Super El Niño & Positive Indian Ocean Dipole',
     badge: 'Niño 3.4 + W. Indian Ocean SST coupling',
     hotBadge: 'Humid heat surge & basin floods',
-    note: 'Warm Pacific & Western Indian Ocean waters pump heavy moisture into East Africa (Oct–Mar), driving coastal & northern deluges alongside +1.5°C to +4.2°C thermal anomalies.',
+    note: 'Warm Pacific & Western Indian Ocean waters pump heavy moisture into East Africa (Oct–Mar), driving coastal & highland deluges alongside +1.5°C to +4.2°C thermal anomalies.',
   },
   cyclone: {
     id: 'cyclone',
     short: '🌀 Cyclone Landfall',
-    title: 'Tropical Cyclone Landfall (Hidaya / Kenneth)',
+    title: 'Tropical Cyclone Landfall (SW Indian Ocean Vortex)',
     badge: 'Cat 2–3 SW Indian Ocean Cyclone',
     hotBadge: '145 km/h winds · Coastal storm surge',
-    note: 'Models a tropical cyclone tracking from the warm Indian Ocean into Kibiti, Dar es Salaam, Kilwa, and Mtwara—compounding coastal storm surge and river basin flooding.',
+    note: 'Models a tropical cyclone tracking from the warm Indian Ocean onto the East African Swahili coast—compounding coastal storm surge and river basin flooding.',
   },
 };
 
@@ -57,22 +82,26 @@ const li = (a, t) => {
 
 const gs = (x, z, c, s) => Math.exp(-((x - c[0]) ** 2 + (z - c[1]) ** 2) / (2 * s * s));
 
-const CENTERS = {
-  ne: wp(38.2, -4.5),
-  vic: wp(32.5, -2.5),
-  dar: wp(39.0, -7.0),
-  sw: wp(33.0, -9.0),
-  mt: wp(38.0, -10.5),
-  cen: wp(35.8, -6.1),
-  coast: wp(39.3, -6.8),
-  shire: wp(36.8, -8.2),
-};
+function getCenters() {
+  const c = getCountry().climateCenters;
+  return {
+    ne: wp(c.ne[0], c.ne[1]),
+    vic: wp(c.vic[0], c.vic[1]),
+    dar: wp(c.dar[0], c.dar[1]),
+    sw: wp(c.sw[0], c.sw[1]),
+    mt: wp(c.mt[0], c.mt[1]),
+    cen: wp(c.cen[0], c.cen[1]),
+    coast: wp(c.coast[0], c.coast[1]),
+    shire: wp(c.shire[0], c.shire[1]),
+  };
+}
 
-// Cyclone eye trajectory as tm goes 0 -> 6
+// Cyclone eye trajectory as tm goes 0 -> 6 (adapts to active country's coast)
 export function getCycloneEye(tm) {
+  const tr = getCountry().cycloneTrack;
   const u = clamp(tm / 5.8, 0, 1);
-  const lon = 42.2 - u * 4.6;
-  const lat = -8.4 + Math.sin(u * Math.PI) * 1.15;
+  const lon = tr.startLon + u * tr.lonDelta;
+  const lat = tr.baseLat + Math.sin(u * Math.PI) * tr.latArc;
   const [x, z] = wp(lon, lat);
   const strength = Math.sin(clamp(u * 1.15, 0.15, 0.95) * Math.PI);
   return { x, z, lon, lat, strength, u };
@@ -101,7 +130,7 @@ export function rainAnomaly(x, z, t, nino = 3.3, scenario = 'elnino') {
     return clamp((eyewall + outerBands + inlandDry) * (0.75 + 0.35 * eye.strength) * mult, -45, 145);
   }
 
-  // Default: 'elnino'
+  const CENTERS = getCenters();
   const n = Math.min(
     1.15,
     gs(x, z, CENTERS.ne, 14) + 0.65 * gs(x, z, CENTERS.vic, 9.5) + 0.75 * gs(x, z, CENTERS.dar, 10.5)
@@ -130,7 +159,8 @@ export function tempAnomaly(x, z, t, nino = 3.3, scenario = 'elnino') {
     return clamp(warmFeed * (nino / 3.0), 0.6, 3.8);
   }
 
-  const eastWarmth = clamp((lo - 30) / 10, 0, 1) * 0.45;
+  const CENTERS = getCenters();
+  const eastWarmth = clamp((lo - 32) / 10, 0, 1) * 0.45;
   const rain = rainAnomaly(x, z, t, nino, scenario);
   const dryBoost = rain < 0 ? (-rain / 60) * 1.15 : -clamp(rain / 180, 0, 0.28);
   const basinBoost =
@@ -138,9 +168,8 @@ export function tempAnomaly(x, z, t, nino = 3.3, scenario = 'elnino') {
     0.65 * gs(x, z, CENTERS.coast, 11) +
     0.5 * gs(x, z, CENTERS.shire, 10);
 
-  const wave = 0.18 * Math.sin(x * 0.22 - t * 0.9) * Math.cos(z * 0.25 + t * 0.7);
-  const baseAnom = (1.15 + eastWarmth + basinBoost + dryBoost * 0.65) * seasonCurve * ninoFactor + wave;
-  return clamp(baseAnom, 0.3, 4.8);
+  const wave = 0.22 * Math.sin(x * 0.22 + t * 1.1) * Math.cos(z * 0.24 - t * 0.8);
+  return clamp((1.15 * seasonCurve + eastWarmth + dryBoost + basinBoost) * ninoFactor + wave, 0.4, 4.4);
 }
 
 export function actualTempC(x, z, h, t, nino = 3.3, scenario = 'elnino') {
@@ -148,33 +177,29 @@ export function actualTempC(x, z, h, t, nino = 3.3, scenario = 'elnino') {
     return sampleLiveWeather(x, z, h, t).absTemp;
   }
   const [lo, la] = unwp(x, z);
-  const seaLevelBase = li(SEASON_TEMP_BASE, t) + (lo - 34) * 0.22 + (la + 6) * 0.08;
-  const lapseRate = h * 2.55;
+  const baseSeason = li(SEASON_TEMP_BASE, t);
+  const coastalBonus = clamp((lo - 36.5) / 3.5, 0, 1) * 1.8;
+  const latFactor = clamp((la + 10) / 14, 0, 1) * 0.8;
+  const elevDrop = Math.max(0, h - 1.1) * 2.55;
   const anom = tempAnomaly(x, z, t, nino, scenario);
-  return seaLevelBase - lapseRate + anom;
+  return clamp(baseSeason + coastalBonus + latFactor - elevDrop + anom * 0.72, 14, 41);
 }
 
 export function heatIndexC(x, z, h, t, nino = 3.3, scenario = 'elnino') {
   if (scenario === 'live') {
     return sampleLiveWeather(x, z, h, t).feelsLike;
   }
-  const temp = actualTempC(x, z, h, t, nino, scenario);
+  const T = actualTempC(x, z, h, t, nino, scenario);
   const [lo] = unwp(x, z);
   const rain = rainAnomaly(x, z, t, nino, scenario);
-  const coastalHumidity = clamp((lo - 35.5) / 4.5, 0, 1) * 2.8;
-  const wetHumidity = clamp((rain + 20) / 100, 0, 1) * 2.1 * (nino / 3.0);
-  return temp + coastalHumidity + wetHumidity;
+  const humidityFactor = clamp((lo - 34) / 5.5, 0.2, 1.0) * (rain > 0 ? 1.25 : 0.75);
+  return Math.round(T + Math.max(0, T - 25) * 0.32 * humidityFactor);
 }
 
 export function sampleWind(x, z, t, nino = 3.3, scenario = 'elnino') {
   if (scenario === 'live') {
     const lw = sampleLiveWeather(x, z, 1, t);
-    return {
-      vx: lw.windVx * 0.55,
-      vz: lw.windVz * 0.55,
-      speedKmh: lw.windKmh,
-      dirDeg: lw.windDir,
-    };
+    return { vx: lw.vx, vz: lw.vz, speedKmh: lw.windKmh, dirDeg: lw.windDir };
   }
 
   if (scenario === 'cyclone') {
@@ -182,21 +207,21 @@ export function sampleWind(x, z, t, nino = 3.3, scenario = 'elnino') {
     const dx = x - eye.x;
     const dz = z - eye.z;
     const r = Math.hypot(dx, dz) + 0.4;
-    const tangX = -dz / r;
-    const tangZ = dx / r;
-    const inX = -dx / r;
-    const inZ = -dz / r;
-    const vortexProfile = Math.exp(-((r - 3.5) ** 2) / (2 * 14 * 14));
-    const speedKmh = 22 + 125 * vortexProfile * eye.strength * (nino / 3.0);
-    const vx = (tangX * 0.84 + inX * 0.36) * (speedKmh * 0.18) - 4.0;
-    const vz = (tangZ * 0.84 + inZ * 0.36) * (speedKmh * 0.18);
+    const swirl = Math.exp(-((r - 4.2) ** 2) / (2 * 14 * 14)) * 28 * (0.7 + 0.4 * eye.strength);
+    const tx = -dz / r;
+    const tz = dx / r;
+    const inx = (-dx / r) * 0.32;
+    const inz = (-dz / r) * 0.32;
+    const vx = -6.5 + (tx + inx) * swirl;
+    const vz = -1.2 + (tz + inz) * swirl;
+    const speedKmh = Math.hypot(vx, vz) * 4.2;
     const dirDeg = ((Math.atan2(-vx, vz) * 180) / Math.PI + 360) % 360;
     return { vx, vz, speedKmh, dirDeg };
   }
 
-  const wet = 0.65 * (nino / 3.3);
-  const vx = -(6.2 + wet * 7.5);
-  const vz = -2.2 * Math.sin((x + z) * 0.06 + t * 0.5) - wet * 1.8;
+  const vx = -(10.5 + 3.8 * Math.sin(z * 0.08 + t) + (x > 6 ? 4.5 : 0)) * (0.68 + 0.1 * nino);
+  const vz =
+    (t < 2.5 ? 1 : -1) * 4.5 * Math.cos(x * 0.09 - t * 0.8) - 2.6 * Math.sin((z - 8) * 0.06);
   const speedKmh = Math.hypot(vx, vz) * 2.4;
   const dirDeg = ((Math.atan2(-vx, vz) * 180) / Math.PI + 360) % 360;
   return { vx, vz, speedKmh, dirDeg };
@@ -222,51 +247,19 @@ export function getTempTier(anom, absTemp = 30) {
   return score < 1.2 ? 0 : score < 2.1 ? 1 : score < 3.0 ? 2 : 3;
 }
 
-export const REGIONS = [
-  ['Moshi', 37.34, -3.35, 'Kilimanjaro slopes & Pare foothills', 890],
-  ['Tanga', 39.1, -5.07, 'Northern coast & Pangani basin', 45],
-  ['Dar es Salaam', 39.28, -6.82, 'Coastal metropolis & Msimbazi basin', 24],
-  ['Morogoro', 37.66, -6.82, 'Uluguru slopes & Kilombero valley', 510],
-  ['Dodoma', 35.74, -6.17, 'Central semi-arid plateau capital', 1120],
-  ['Mwanza', 32.9, -2.52, 'Lake Victoria southern shoreline', 1140],
-  ['Kigoma', 29.63, -4.88, 'Lake Tanganyika eastern escarpment', 780],
-  ['Mbeya', 33.46, -8.9, 'Southern Highlands agricultural belt', 1700],
-  ['Mtwara', 40.18, -10.27, 'Southern coast & Ruvuma basin', 110],
-];
+export const REGIONS = [...getCountry().regions];
+export const GEO_LABELS = [...getCountry().geoLabels];
+export const TOWNS = [...getCountry().towns];
 
-export const GEO_LABELS = [
-  ['Mt. Kilimanjaro · 5,895 m', 37.35, -3.07, 4.4, 'peak'],
-  ['Mt. Meru · 4,562 m', 36.75, -3.24, 3.1, 'peak'],
-  ['Ngorongoro Crater', 35.58, -3.18, 2.6, 'peak'],
-  ['Serengeti National Park', 34.8, -2.4, 1.4, 'land'],
-  ['Rufiji River Delta', 39.15, -7.85, 0.7, 'lake'],
-  ['Lake Victoria', 32.7, -1.9, 0.8, 'lake'],
-  ['Lake Tanganyika', 29.9, -6.4, 0.8, 'lake'],
-  ['Lake Nyasa', 34.5, -10.8, 0.8, 'lake'],
-  ['Zanzibar (Unguja)', 39.35, -6.15, 0.9, 'island'],
-  ['Indian Ocean', 41.1, -7.5, 0.6, 'ocean'],
-];
-
-export const TOWNS = [
-  ['Arusha', 36.68, -3.37, 1.4],
-  ['Iringa', 35.69, -7.77, 1.0],
-  ['Songea', 35.66, -10.68, 0.95],
-  ['Singida', 34.76, -4.82, 0.9],
-  ['Tabora', 32.8, -5.02, 1.05],
-  ['Lindi', 39.71, -9.99, 0.85],
-  ['Bukoba', 31.81, -1.33, 0.95],
-  ['Musoma', 33.8, -1.5, 0.85],
-  ['Sumbawanga', 31.62, -7.97, 0.9],
-  ['Shinyanga', 33.42, -3.66, 0.95],
-  ['Babati (Hanang)', 35.75, -4.22, 0.85],
-  ['Njombe', 34.77, -9.34, 0.85],
-  ['Mpanda', 31.07, -6.35, 0.8],
-  ['Kilwa Masoko', 39.51, -8.91, 0.8],
-  ['Bagamoyo', 38.9, -6.44, 0.9],
-  ['Same', 37.75, -4.07, 0.75],
-  ['Korogwe', 38.45, -5.15, 0.8],
-  ['Zanzibar City', 39.2, -6.16, 1.35],
-];
+export function syncCountryClimateArrays() {
+  const c = getCountry();
+  REGIONS.length = 0;
+  c.regions.forEach((r) => REGIONS.push(r));
+  GEO_LABELS.length = 0;
+  c.geoLabels.forEach((g) => GEO_LABELS.push(g));
+  TOWNS.length = 0;
+  c.towns.forEach((t) => TOWNS.push(t));
+}
 
 export function getImpacts(
   rainA,

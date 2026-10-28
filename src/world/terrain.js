@@ -1,7 +1,7 @@
-// Vibrant 3D Topographic & Climate Relief Map of Tanzania (Full Mountain Relief + Fast 60 FPS Caching)
+// Vibrant 3D Topographic & Climate Relief Map (Full Mountain Relief + Fast 60 FPS Caching)
 import * as THREE from 'three';
-import { GEO } from '../data/geo.js';
-import { K, R, wp, clamp, rainAnomaly, tempAnomaly } from '../data/climate.js';
+import { K, R, wp, unwp, clamp, rainAnomaly, tempAnomaly } from '../data/climate.js';
+import { getCountry } from '../data/countries/index.js';
 import { makeNoise, smoothstep } from './noise.js';
 import { createSatelliteTexture } from './satellite.js';
 
@@ -13,9 +13,28 @@ const toR = (f) => {
   return a;
 };
 
-export const RINGS = GEO.c.map(toR);
-export const LAKES = GEO.l.map(toR);
-export const REG_BORDERS = GEO.r.map(toR);
+export const RINGS = [];
+export const LAKES = [];
+export const REG_BORDERS = [];
+let PEAKS = [];
+
+export function syncCountryTerrainData() {
+  const country = getCountry();
+  const nextRings = country.geo.c.map(toR);
+  RINGS.length = 0;
+  nextRings.forEach((r) => RINGS.push(r));
+
+  const nextLakes = country.geo.l.map(toR);
+  LAKES.length = 0;
+  nextLakes.forEach((l) => LAKES.push(l));
+
+  const nextBorders = (country.geo.r || []).map(toR);
+  REG_BORDERS.length = 0;
+  nextBorders.forEach((b) => REG_BORDERS.push(b));
+
+  PEAKS = country.peaks.map(([lo, la, a, s]) => [wp(lo, la), a, s]);
+}
+syncCountryTerrainData();
 
 export const inRing = (a, x, z) => {
   let c = false;
@@ -32,30 +51,6 @@ export const inLake = (x, z) => LAKES.some((r) => inRing(r, x, z));
 
 export const signedLandDist = (x, z) => (inLand(x, z) ? 1.0 : -1.0);
 export const signedLakeDist = (x, z) => (inLake(x, z) ? 1.0 : -1.0);
-
-// Major topographic features of Tanzania [lon, lat, amp, sigma] — Full Nationwide Coverage
-const PEAKS = [
-  [37.35, -3.07, 7.6, 1.85], // Mt Kilimanjaro (Kibo & Mawenzi)
-  [36.75, -3.24, 4.4, 1.35], // Mt Meru
-  [35.55, -3.18, 3.6, 3.4],  // Ngorongoro Crater Highlands
-  [35.4, -4.44, 3.0, 1.4],   // Mt Hanang
-  [38.35, -4.75, 3.1, 1.9],  // Usambara Mountains
-  [37.75, -4.15, 2.7, 1.6],  // Pare Mountains
-  [37.66, -7.1, 3.3, 1.95],  // Uluguru Mountains
-  [36.5, -7.8, 3.2, 2.8],    // Udzungwa Escarpment
-  [35.5, -8.5, 3.8, 4.6],    // Southern Highlands (Iringa / Njombe)
-  [33.75, -9.15, 4.9, 2.7],  // Mt Rungwe & Kipengere Range
-  [35.65, -10.68, 2.8, 4.2], // Matengo / Songea Highlands (Southern Tanzania)
-  [37.8, -10.4, 1.85, 5.5],  // Ruvuma / Tunduru Southern Uplands
-  [39.5, -10.2, 1.6, 3.2],   // Makonde Plateau (Mtwara / Newala)
-  [38.0, -8.6, 1.45, 5.0],   // Selous / Nyerere Miombo Uplands
-  [31.2, -7.8, 2.7, 4.2],    // Ufipa Plateau (Sumbawanga)
-  [31.1, -6.2, 2.1, 4.5],    // Katavi / Mpanda Western Plateau
-  [30.1, -4.6, 2.4, 3.2],    // Mahale / Kigoma Escarpment
-  [32.1, -3.6, 1.85, 5.2],   // Geita / Kahama / Biharamulo Uplands
-  [33.5, -5.5, 1.85, 14.0],  // Central East African Plateau
-  [35.8, -5.8, 1.55, 9.5],   // Dodoma / Maasai Steppe Uplands
-].map(([lo, la, a, s]) => [wp(lo, la), a, s]);
 
 export function relief(x, z) {
   let h = 0.95; // Lifted continental & island base height well above the y = 0.0 ocean everywhere in Tanzania
@@ -98,7 +93,11 @@ function snapToNearestRing(x, z) {
   return [bestX, bestZ];
 }
 
+const normalMapCache = {};
+
 export function buildTerrain(scene, waterUniforms, renderer) {
+  syncCountryTerrainData();
+  const country = getCountry();
   const satTex = createSatelliteTexture(renderer);
 
   // Bake 512x512 Outer Perimeter Proximity Map (RINGS only, with LAKES explicitly masked out in black so Lake Tanganyika & Lake Victoria never get brown rims!)
@@ -209,10 +208,10 @@ export function buildTerrain(scene, waterUniforms, renderer) {
       const beachVal = isLk ? 0 : shoreData[(sy * 512 + sx) * 4] / 255;
       vbeach.push(beachVal);
 
-      const [lo, la] = [x / K + 35, -(z / K + 6.3)];
+      const [lo, la] = unwp(x, z);
       const coastalLush = smoothstep(36.5, 39.5, lo) * 0.45;
       const highlandLush = smoothstep(2.4, 5.1, h) * 0.55;
-      const lakeLush = smoothstep(-4.0, -1.0, la) * smoothstep(31, 34, lo) * 0.4;
+      const lakeLush = smoothstep(-4.0, 1.5, la) * smoothstep(31, 35, lo) * 0.4;
       const nVar = fbm(x * 0.18 + 9, z * 0.18 - 4, 2) * 0.25;
       vbiome.push(clamp(0.32 + coastalLush + highlandLush + lakeLush + nVar, 0, 1));
     }
@@ -322,7 +321,10 @@ export function buildTerrain(scene, waterUniforms, renderer) {
     return tex;
   }
 
-  const normalMapTex = bakeTerrainNormalMap(512);
+  if (!normalMapCache[country.id]) {
+    normalMapCache[country.id] = bakeTerrainNormalMap(512);
+  }
+  const normalMapTex = normalMapCache[country.id];
 
   const tmat = new THREE.MeshStandardMaterial({
     map: satTex,
@@ -753,5 +755,19 @@ export function buildTerrain(scene, waterUniforms, renderer) {
     tgm.computeVertexNormals();
   }
 
-  return { terr, wf, shelfMesh, coastGlow, lakeMeshes, updateSurface, lift };
+  function dispose() {
+    scene.remove(terr);
+    scene.remove(wf);
+    scene.remove(shelfMesh);
+    tgm.dispose();
+    tmat.dispose();
+    wallGeo.dispose();
+    shelfMesh.material.dispose();
+    floorGroup.children.forEach((c) => {
+      if (c.geometry) c.geometry.dispose();
+    });
+    floorMat.dispose();
+  }
+
+  return { terr, wf, shelfMesh, coastGlow, lakeMeshes, updateSurface, lift, dispose };
 }
